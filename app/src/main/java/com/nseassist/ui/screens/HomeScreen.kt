@@ -59,6 +59,7 @@ fun HomeScreen(navController: NavController, vm: MainViewModel) {
     val currentTab = HomeTab.valueOf(selectedTab)
     val currentCategory = ScanCategory.fromRouteValue(selectedCategory)
 
+    AppGradientBackground {
     Scaffold(
         topBar = {
             TopAppBar(
@@ -99,7 +100,7 @@ fun HomeScreen(navController: NavController, vm: MainViewModel) {
                 }
             }
         },
-        containerColor = SurfaceDark,
+        containerColor = Color.Transparent,
     ) { padding ->
         Column(
             modifier = Modifier
@@ -140,6 +141,7 @@ fun HomeScreen(navController: NavController, vm: MainViewModel) {
             )
         }
     }
+    } // AppGradientBackground
 }
 
 @Composable

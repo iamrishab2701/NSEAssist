@@ -1,5 +1,6 @@
 package com.nseassist.ui.screens
 
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -61,6 +62,7 @@ fun ScanScreen(
 
     LaunchedEffect(capital, category) { vm.scanStocks(capital, category) }
 
+    AppGradientBackground {
     Scaffold(
         topBar = {
             TopAppBar(
@@ -73,7 +75,7 @@ fun ScanScreen(
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = CardDark),
             )
         },
-        containerColor = SurfaceDark,
+        containerColor = Color.Transparent,
     ) { padding ->
         when (val state = scanState) {
             is UiState.Loading -> Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
@@ -212,6 +214,7 @@ fun ScanScreen(
             }
         }
     }
+    } // AppGradientBackground
 }
 
 @Composable

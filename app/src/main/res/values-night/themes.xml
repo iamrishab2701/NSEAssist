@@ -1,13 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <!--
-        Light theme — window background matches the light gradient start colour so
+        Dark theme — window background matches the dark gradient start colour so
         there is no colour flash before Compose draws its first frame.
-        Status / nav bar colours are set programmatically in Theme.kt via
-        WindowInsetsControllerCompat, so we do NOT set them here.
     -->
     <style name="Theme.NSEAssist" parent="Theme.AppCompat.DayNight.NoActionBar">
-        <item name="android:windowBackground">#FFEEF2FF</item>
+        <item name="android:windowBackground">#FF080C14</item>
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:navigationBarColor">@android:color/transparent</item>
         <item name="android:windowTranslucentStatus">false</item>

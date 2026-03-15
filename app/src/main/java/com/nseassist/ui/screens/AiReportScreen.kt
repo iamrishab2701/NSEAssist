@@ -32,6 +32,8 @@ import androidx.navigation.NavController
 import com.nseassist.data.model.AiAnalysisReport
 import com.nseassist.data.model.AiTradeDirection
 import com.nseassist.ui.viewmodel.ExportState
+import androidx.compose.ui.graphics.Color
+import com.nseassist.ui.theme.AppGradientBackground
 import com.nseassist.ui.theme.BluePrimary
 import com.nseassist.ui.theme.CardDark
 import com.nseassist.ui.theme.GreenBull
@@ -53,6 +55,7 @@ fun AiReportScreen(navController: NavController, vm: MainViewModel) {
     val analysisState by vm.aiAnalysis.collectAsState()
     val exportState by vm.exportState.collectAsState()
 
+    AppGradientBackground {
     Scaffold(
         topBar = {
             TopAppBar(
@@ -65,7 +68,7 @@ fun AiReportScreen(navController: NavController, vm: MainViewModel) {
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = CardDark),
             )
         },
-        containerColor = SurfaceDark,
+        containerColor = Color.Transparent,
     ) { padding ->
         when {
             exportState is ExportState.Preparing -> {
@@ -79,6 +82,7 @@ fun AiReportScreen(navController: NavController, vm: MainViewModel) {
             else -> EmptyAiReportState(padding)
         }
     }
+    } // AppGradientBackground
 }
 
 @Composable

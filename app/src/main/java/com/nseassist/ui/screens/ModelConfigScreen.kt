@@ -1,6 +1,7 @@
 package com.nseassist.ui.screens
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.ui.graphics.Color
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -22,6 +23,7 @@ import com.nseassist.ui.viewmodel.MainViewModel
 fun ModelConfigScreen(navController: NavController, vm: MainViewModel) {
     val aiSettings by vm.aiSettings.collectAsState()
 
+    AppGradientBackground {
     Scaffold(
         topBar = {
             TopAppBar(
@@ -34,7 +36,7 @@ fun ModelConfigScreen(navController: NavController, vm: MainViewModel) {
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = CardDark),
             )
         },
-        containerColor = SurfaceDark,
+        containerColor = Color.Transparent,
     ) { padding ->
         Column(
             modifier = Modifier
@@ -53,6 +55,7 @@ fun ModelConfigScreen(navController: NavController, vm: MainViewModel) {
             }
         }
     }
+    } // AppGradientBackground
 }
 
 @Composable

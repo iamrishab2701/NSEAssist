@@ -1,6 +1,7 @@
 package com.nseassist.ui.screens
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.ui.graphics.Color
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
@@ -15,6 +16,7 @@ import com.nseassist.ui.theme.*
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AboutAppScreen(navController: NavController) {
+    AppGradientBackground {
     Scaffold(
         topBar = {
             TopAppBar(
@@ -27,7 +29,7 @@ fun AboutAppScreen(navController: NavController) {
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = CardDark),
             )
         },
-        containerColor = SurfaceDark,
+        containerColor = Color.Transparent,
     ) { padding ->
         Column(
             modifier = Modifier
@@ -62,19 +64,21 @@ fun AboutAppScreen(navController: NavController) {
             }
         }
     }
+    } // AppGradientBackground
 }
 
 @Composable
 private fun AboutRow(
     label: String,
     value: String,
-    valueColor: androidx.compose.ui.graphics.Color = TextPrimary,
+    valueColor: Color = Color.Unspecified,   // Color.Unspecified → defaults to TextPrimary
 ) {
+    val effectiveColor = if (valueColor == Color.Unspecified) TextPrimary else valueColor
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.SpaceBetween,
     ) {
         Text(label, color = TextSecondary, fontSize = 13.sp)
-        Text(value, color = valueColor, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+        Text(value, color = effectiveColor, fontSize = 13.sp, fontWeight = FontWeight.Medium)
     }
 }

@@ -61,6 +61,7 @@ fun StockDetailScreen(navController: NavController, symbol: String, vm: MainView
         }
     }
 
+    AppGradientBackground {
     Scaffold(
         topBar = {
             TopAppBar(
@@ -73,7 +74,7 @@ fun StockDetailScreen(navController: NavController, symbol: String, vm: MainView
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = CardDark),
             )
         },
-        containerColor = SurfaceDark,
+        containerColor = Color.Transparent,
         floatingActionButton = {
             if (detailState is UiState.Success) {
                 val isAnalyzing = singleStockAnalysis is UiState.Loading
@@ -110,6 +111,7 @@ fun StockDetailScreen(navController: NavController, symbol: String, vm: MainView
             is UiState.Success -> StockDetailContent(state.data, newsState, Modifier.padding(padding))
         }
     }
+    } // AppGradientBackground
 }
 
 // ── AI Bottom Sheet ────────────────────────────────────────────────────────────
@@ -734,6 +736,7 @@ private fun fmtVol(v: Long): String = when {
     else -> v.toString()
 }
 
+@Composable
 private fun rsiColor(rsi: Double) = when {
     rsi in 45.0..65.0 -> GreenBull; rsi > 70 -> RedBear; rsi < 30 -> AmberWarn; else -> TextSecondary
 }
@@ -742,12 +745,15 @@ private fun rsiLabel(rsi: Double) = when {
     rsi > 70 -> "Overbought"; rsi < 30 -> "Oversold"; rsi in 45.0..65.0 -> "Sweet Spot"; else -> "Neutral"
 }
 
+@Composable
 private fun trendColor(t: String) = when (t) {
     "Bullish", "Trending Up" -> GreenBull; "Bearish", "Trending Down" -> RedBear; else -> AmberWarn
 }
 
+@Composable
 private fun predColor(d: String) = when (d) { "Up" -> GreenBull; "Down" -> RedBear; else -> AmberWarn }
 
+@Composable
 private fun newsColor(sentiment: NewsSentiment) = when (sentiment) {
     NewsSentiment.POSITIVE -> GreenBull
     NewsSentiment.NEGATIVE -> RedBear
