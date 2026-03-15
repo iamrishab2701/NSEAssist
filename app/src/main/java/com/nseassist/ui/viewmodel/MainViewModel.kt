@@ -9,6 +9,8 @@ import com.nseassist.data.model.AiAnalysisReport
 import com.nseassist.data.model.AiProvider
 import com.nseassist.data.model.AiProviderConfig
 import com.nseassist.data.model.AiSettings
+import com.nseassist.data.api.GlobalTrendsClient
+import com.nseassist.data.model.GlobalTrendsData
 import com.nseassist.data.model.MarketOverview
 import com.nseassist.data.model.NewsResult
 import com.nseassist.data.model.ScanCategory
@@ -48,6 +50,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     // ── Stock Detail ─────────────────────────────────────────────────────────────
     private val _stockDetail = MutableStateFlow<UiState<StockData>>(UiState.Loading)
     val stockDetail: StateFlow<UiState<StockData>> = _stockDetail
+
+    // ── Global Trends ─────────────────────────────────────────────────────────────
+    private val _globalTrends = MutableStateFlow<UiState<GlobalTrendsData>>(UiState.Loading)
+    val globalTrends: StateFlow<UiState<GlobalTrendsData>> = _globalTrends
 
     // ── Stock News — loaded independently so technical data shows instantly ───────
     private val _stockNews = MutableStateFlow<UiState<NewsResult?>>(UiState.Loading)
@@ -101,6 +107,26 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             _marketOverview.value = UiState.Loading
             _marketOverview.value = repo.getMarketOverview()
                 .fold(onSuccess = { UiState.Success(it) }, onFailure = { UiState.Error(it.message ?: "Network error") })
+        }
+    }
+
+    fun loadGlobalTrends() {
+        // Skip if already loaded (cached) — user can force refresh via the Refresh button
+        if (_globalTrends.value is UiState.Success) return
+        viewModelScope.launch {
+            _globalTrends.value = UiState.Loading
+            val data = GlobalTrendsClient.fetchGlobalTrends()
+            _globalTrends.value = if (data != null) UiState.Success(data)
+                                  else UiState.Error("Failed to load global trends")
+        }
+    }
+
+    fun refreshGlobalTrends() {
+        viewModelScope.launch {
+            _globalTrends.value = UiState.Loading
+            val data = GlobalTrendsClient.fetchGlobalTrends()
+            _globalTrends.value = if (data != null) UiState.Success(data)
+                                  else UiState.Error("Failed to load global trends")
         }
     }
 

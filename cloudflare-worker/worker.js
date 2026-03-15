@@ -36,6 +36,151 @@ let _screenerTs   = 0;
 let _screenerKey  = "";
 const SCREENER_TTL = 5 * 60 * 1000;
 
+// ── Global Trends cache ───────────────────────────────────────────────────────
+let _trendsBody = null;
+let _trendsTs   = 0;
+const TRENDS_TTL = 15 * 60 * 1000;
+
+// ── Indian sector map cache ───────────────────────────────────────────────────
+let _indSectors   = null; // Map<sector, ImpactedStock[]>
+let _indSectorsTs = 0;
+const IND_SECTORS_TTL = 60 * 60 * 1000;
+
+// ── Global index metadata ─────────────────────────────────────────────────────
+const GLOBAL_INDEX_META = {
+  "^DJI":      { name: "Dow Jones",   group: "us" },
+  "^GSPC":     { name: "S&P 500",     group: "us" },
+  "^IXIC":     { name: "Nasdaq",      group: "us" },
+  "^N225":     { name: "Nikkei 225",  group: "asia" },
+  "^HSI":      { name: "Hang Seng",   group: "asia" },
+  "^FTSE":     { name: "FTSE 100",    group: "asia" },
+  "^NSEI":     { name: "NIFTY 50",    group: "india" },
+  "^NSEBANK":  { name: "BANK NIFTY",  group: "india" },
+  "^INDIAVIX": { name: "India VIX",   group: "india" },
+  "CL=F":      { name: "Crude Oil",   group: "commodities" },
+  "GC=F":      { name: "Gold",        group: "commodities" },
+  "USDINR=X":  { name: "USD/INR",     group: "forex" },
+};
+
+// ── US large-cap stocks by sector — for impact cards when screener is unavailable ──
+// chartToQuote (v8/chart) works without crumb, so these are always fetchable.
+const FALLBACK_US_STOCKS = [
+  // Technology
+  { symbol: "AAPL",  name: "Apple Inc.",               sector: "Technology" },
+  { symbol: "MSFT",  name: "Microsoft Corp.",           sector: "Technology" },
+  { symbol: "NVDA",  name: "NVIDIA Corp.",              sector: "Technology" },
+  { symbol: "GOOGL", name: "Alphabet Inc.",             sector: "Technology" },
+  { symbol: "META",  name: "Meta Platforms Inc.",       sector: "Technology" },
+  { symbol: "AMD",   name: "Advanced Micro Devices",    sector: "Technology" },
+  { symbol: "INTC",  name: "Intel Corp.",               sector: "Technology" },
+  // Financial Services
+  { symbol: "JPM",   name: "JPMorgan Chase & Co.",      sector: "Financial Services" },
+  { symbol: "BAC",   name: "Bank of America Corp.",     sector: "Financial Services" },
+  { symbol: "GS",    name: "Goldman Sachs Group",       sector: "Financial Services" },
+  { symbol: "MS",    name: "Morgan Stanley",            sector: "Financial Services" },
+  { symbol: "WFC",   name: "Wells Fargo & Co.",         sector: "Financial Services" },
+  // Energy
+  { symbol: "XOM",   name: "Exxon Mobil Corp.",         sector: "Energy" },
+  { symbol: "CVX",   name: "Chevron Corp.",             sector: "Energy" },
+  { symbol: "COP",   name: "ConocoPhillips",            sector: "Energy" },
+  // Healthcare
+  { symbol: "JNJ",   name: "Johnson & Johnson",         sector: "Healthcare" },
+  { symbol: "PFE",   name: "Pfizer Inc.",               sector: "Healthcare" },
+  { symbol: "UNH",   name: "UnitedHealth Group",        sector: "Healthcare" },
+  { symbol: "ABBV",  name: "AbbVie Inc.",               sector: "Healthcare" },
+  // Consumer Cyclical
+  { symbol: "AMZN",  name: "Amazon.com Inc.",           sector: "Consumer Cyclical" },
+  { symbol: "TSLA",  name: "Tesla Inc.",                sector: "Consumer Cyclical" },
+  { symbol: "HD",    name: "Home Depot Inc.",           sector: "Consumer Cyclical" },
+  { symbol: "NKE",   name: "Nike Inc.",                 sector: "Consumer Cyclical" },
+  // Consumer Defensive
+  { symbol: "WMT",   name: "Walmart Inc.",              sector: "Consumer Defensive" },
+  { symbol: "PG",    name: "Procter & Gamble Co.",      sector: "Consumer Defensive" },
+  { symbol: "KO",    name: "Coca-Cola Co.",             sector: "Consumer Defensive" },
+  // Industrials
+  { symbol: "CAT",   name: "Caterpillar Inc.",          sector: "Industrials" },
+  { symbol: "BA",    name: "Boeing Co.",                sector: "Industrials" },
+  { symbol: "GE",    name: "GE Aerospace",              sector: "Industrials" },
+  { symbol: "HON",   name: "Honeywell Intl.",           sector: "Industrials" },
+  // Basic Materials
+  { symbol: "FCX",   name: "Freeport-McMoRan Inc.",     sector: "Basic Materials" },
+  { symbol: "NEM",   name: "Newmont Corp.",             sector: "Basic Materials" },
+  { symbol: "AA",    name: "Alcoa Corp.",               sector: "Basic Materials" },
+  // Communication Services
+  { symbol: "NFLX",  name: "Netflix Inc.",              sector: "Communication Services" },
+  { symbol: "DIS",   name: "Walt Disney Co.",           sector: "Communication Services" },
+  { symbol: "T",     name: "AT&T Inc.",                 sector: "Communication Services" },
+  // Utilities
+  { symbol: "NEE",   name: "NextEra Energy Inc.",       sector: "Utilities" },
+  { symbol: "DUK",   name: "Duke Energy Corp.",         sector: "Utilities" },
+  // Real Estate
+  { symbol: "PLD",   name: "Prologis Inc.",             sector: "Real Estate" },
+  { symbol: "AMT",   name: "American Tower Corp.",      sector: "Real Estate" },
+];
+
+// ── Indian stocks by sector — hardcoded so impact cards never depend on Yahoo returning sector ──
+const FALLBACK_INDIA_STOCKS = [
+  // Technology
+  { symbol: "TCS.NS",        nseSymbol: "TCS",        name: "Tata Consultancy Services", sector: "Technology" },
+  { symbol: "INFY.NS",       nseSymbol: "INFY",       name: "Infosys Ltd.",              sector: "Technology" },
+  { symbol: "WIPRO.NS",      nseSymbol: "WIPRO",      name: "Wipro Ltd.",                sector: "Technology" },
+  { symbol: "HCLTECH.NS",    nseSymbol: "HCLTECH",    name: "HCL Technologies",          sector: "Technology" },
+  { symbol: "TECHM.NS",      nseSymbol: "TECHM",      name: "Tech Mahindra",             sector: "Technology" },
+  // Financial Services
+  { symbol: "HDFCBANK.NS",   nseSymbol: "HDFCBANK",   name: "HDFC Bank Ltd.",            sector: "Financial Services" },
+  { symbol: "ICICIBANK.NS",  nseSymbol: "ICICIBANK",  name: "ICICI Bank Ltd.",           sector: "Financial Services" },
+  { symbol: "SBIN.NS",       nseSymbol: "SBIN",       name: "State Bank of India",       sector: "Financial Services" },
+  { symbol: "AXISBANK.NS",   nseSymbol: "AXISBANK",   name: "Axis Bank Ltd.",            sector: "Financial Services" },
+  { symbol: "KOTAKBANK.NS",  nseSymbol: "KOTAKBANK",  name: "Kotak Mahindra Bank",       sector: "Financial Services" },
+  { symbol: "BAJFINANCE.NS", nseSymbol: "BAJFINANCE", name: "Bajaj Finance Ltd.",        sector: "Financial Services" },
+  { symbol: "PFC.NS",        nseSymbol: "PFC",        name: "Power Finance Corp.",       sector: "Financial Services" },
+  { symbol: "RECLTD.NS",     nseSymbol: "RECLTD",     name: "REC Ltd.",                  sector: "Financial Services" },
+  // Energy
+  { symbol: "RELIANCE.NS",   nseSymbol: "RELIANCE",   name: "Reliance Industries",       sector: "Energy" },
+  { symbol: "ONGC.NS",       nseSymbol: "ONGC",       name: "Oil & Natural Gas Corp.",   sector: "Energy" },
+  { symbol: "IOC.NS",        nseSymbol: "IOC",        name: "Indian Oil Corp.",          sector: "Energy" },
+  { symbol: "BPCL.NS",       nseSymbol: "BPCL",       name: "Bharat Petroleum",         sector: "Energy" },
+  { symbol: "GAIL.NS",       nseSymbol: "GAIL",       name: "GAIL (India) Ltd.",         sector: "Energy" },
+  { symbol: "COALINDIA.NS",  nseSymbol: "COALINDIA",  name: "Coal India Ltd.",           sector: "Energy" },
+  { symbol: "TATAPOWER.NS",  nseSymbol: "TATAPOWER",  name: "Tata Power Co.",            sector: "Energy" },
+  // Healthcare
+  { symbol: "SUNPHARMA.NS",  nseSymbol: "SUNPHARMA",  name: "Sun Pharmaceutical",       sector: "Healthcare" },
+  { symbol: "DRREDDY.NS",    nseSymbol: "DRREDDY",    name: "Dr. Reddy's Laboratories", sector: "Healthcare" },
+  { symbol: "CIPLA.NS",      nseSymbol: "CIPLA",      name: "Cipla Ltd.",               sector: "Healthcare" },
+  { symbol: "APOLLOHOSP.NS", nseSymbol: "APOLLOHOSP", name: "Apollo Hospitals",         sector: "Healthcare" },
+  // Consumer Cyclical
+  { symbol: "TATAMOTORS.NS", nseSymbol: "TATAMOTORS", name: "Tata Motors Ltd.",         sector: "Consumer Cyclical" },
+  { symbol: "MARUTI.NS",     nseSymbol: "MARUTI",     name: "Maruti Suzuki India",      sector: "Consumer Cyclical" },
+  { symbol: "ZOMATO.NS",     nseSymbol: "ZOMATO",     name: "Zomato Ltd.",              sector: "Consumer Cyclical" },
+  { symbol: "TITAN.NS",      nseSymbol: "TITAN",      name: "Titan Company Ltd.",       sector: "Consumer Cyclical" },
+  // Consumer Defensive
+  { symbol: "ITC.NS",        nseSymbol: "ITC",        name: "ITC Ltd.",                 sector: "Consumer Defensive" },
+  { symbol: "NESTLEIND.NS",  nseSymbol: "NESTLEIND",  name: "Nestle India Ltd.",        sector: "Consumer Defensive" },
+  { symbol: "HINDUNILVR.NS", nseSymbol: "HINDUNILVR", name: "Hindustan Unilever",       sector: "Consumer Defensive" },
+  { symbol: "ASIANPAINT.NS", nseSymbol: "ASIANPAINT", name: "Asian Paints Ltd.",        sector: "Consumer Defensive" },
+  // Industrials
+  { symbol: "LT.NS",         nseSymbol: "LT",         name: "Larsen & Toubro Ltd.",     sector: "Industrials" },
+  { symbol: "ADANIPORTS.NS", nseSymbol: "ADANIPORTS", name: "Adani Ports & SEZ",        sector: "Industrials" },
+  { symbol: "SIEMENS.NS",    nseSymbol: "SIEMENS",    name: "Siemens Ltd.",             sector: "Industrials" },
+  // Basic Materials
+  { symbol: "TATASTEEL.NS",  nseSymbol: "TATASTEEL",  name: "Tata Steel Ltd.",          sector: "Basic Materials" },
+  { symbol: "JSWSTEEL.NS",   nseSymbol: "JSWSTEEL",   name: "JSW Steel Ltd.",           sector: "Basic Materials" },
+  { symbol: "HINDALCO.NS",   nseSymbol: "HINDALCO",   name: "Hindalco Industries",      sector: "Basic Materials" },
+  { symbol: "VEDL.NS",       nseSymbol: "VEDL",       name: "Vedanta Ltd.",             sector: "Basic Materials" },
+  { symbol: "NMDC.NS",       nseSymbol: "NMDC",       name: "NMDC Ltd.",                sector: "Basic Materials" },
+  // Communication Services
+  { symbol: "BHARTIARTL.NS", nseSymbol: "BHARTIARTL", name: "Bharti Airtel Ltd.",       sector: "Communication Services" },
+  { symbol: "IDEA.NS",       nseSymbol: "IDEA",       name: "Vodafone Idea Ltd.",        sector: "Communication Services" },
+  // Utilities
+  { symbol: "NTPC.NS",       nseSymbol: "NTPC",       name: "NTPC Ltd.",                sector: "Utilities" },
+  { symbol: "POWERGRID.NS",  nseSymbol: "POWERGRID",  name: "Power Grid Corp.",         sector: "Utilities" },
+  { symbol: "NHPC.NS",       nseSymbol: "NHPC",       name: "NHPC Ltd.",                sector: "Utilities" },
+  { symbol: "ADANIENT.NS",   nseSymbol: "ADANIENT",   name: "Adani Enterprises",        sector: "Utilities" },
+  // Real Estate
+  { symbol: "DLF.NS",        nseSymbol: "DLF",        name: "DLF Ltd.",                 sector: "Real Estate" },
+  { symbol: "GODREJPROP.NS", nseSymbol: "GODREJPROP", name: "Godrej Properties",        sector: "Real Estate" },
+];
+
 // ── Fallback NSE stock list for screener when Yahoo screener is unavailable ───
 const FALLBACK_SYMBOLS = [
   "YESBANK.NS","IDEA.NS","RPOWER.NS","NHPC.NS","SJVN.NS",
@@ -539,7 +684,8 @@ const TITLE_RE  = /<title[^>]*>([\s\S]*?)<\/title>/i;
 const DATE_RE   = /<pubDate[^>]*>([\s\S]*?)<\/pubDate>/i;
 const POS_WORDS = ["surge","rally","gain","gains","rise","rises","up","bullish","buy","breakout","profit","growth","strong","upgrade","beat","outperform","record","high","positive","boost"];
 const NEG_WORDS = ["fall","falls","drop","drops","crash","decline","declines","down","bearish","sell","breakdown","loss","losses","weak","downgrade","miss","underperform","low","slump","concern","risk"];
-const MAX_NEWS_AGE_MS = 24 * 60 * 60 * 1000;
+const MAX_NEWS_AGE_MS        = 24 * 60 * 60 * 1000; // /news endpoint: 24 hours
+const MAX_TRENDS_NEWS_AGE_MS = 12 * 60 * 60 * 1000; // /global-trends impact cards: 12 hours
 
 // ── News helpers ──────────────────────────────────────────────────────────────
 
@@ -669,6 +815,256 @@ async function handleNews(searchParams) {
   );
 }
 
+// ── Global Trends helpers ─────────────────────────────────────────────────────
+
+/**
+ * Fetch global index quotes — uses v8/chart (chartToQuote) in parallel for all symbols.
+ * chartToQuote is more reliable than v7/quote for indices + commodities + forex because:
+ *   - Works without a crumb (v8/chart is more permissive than v7/quote)
+ *   - Correctly handles closed-market change% by computing from price - prevClose
+ *   - Used by the existing /quotes handler as Strategy 4 (proven reliable)
+ */
+async function fetchGlobalIndexQuotes() {
+  const symbols = Object.keys(GLOBAL_INDEX_META);
+  const results = await Promise.all(symbols.map(sym => chartToQuote(sym)));
+  return results.filter(q => q !== null && (q.regularMarketPrice ?? 0) > 0);
+}
+
+/** Re-usable: fetch all 12 RSS sources in parallel (each edge-cached 15 min). */
+async function fetchAllRssArticles() {
+  const results = await Promise.all(
+    RSS_SOURCES.map(async ({ name, url }) => {
+      const xml = await fetchCachedRss(url);
+      return xml ? parseRssItems(xml, name) : [];
+    })
+  );
+  return results.flat();
+}
+
+/** Yahoo v7/quote with custom fields (used to retrieve sector data). */
+async function fetchQuotesWithFields(symbols, fields) {
+  for (const [base, crumb, cookies] of [[YAHOO1, _crumb, _cookies], [YAHOO1, "", ""], [YAHOO2, "", ""]]) {
+    try {
+      const url  = `${base}/v7/finance/quote?symbols=${enc(symbols)}&fields=${enc(fields)}${crumbParam(crumb)}`;
+      const resp = await fetch(url, { headers: yahooHeaders(cookies) });
+      if (resp.ok) {
+        const j = await resp.json();
+        const r = j?.quoteResponse?.result ?? [];
+        if (r.length > 0) return r;
+      }
+    } catch { /* next */ }
+  }
+  return [];
+}
+
+/**
+ * Build Map<sector, ImpactedStock[]> from FALLBACK_INDIA_STOCKS (hardcoded).
+ * Sectors are pre-assigned so this never depends on Yahoo returning sector metadata.
+ * Cached for 1 hour.
+ */
+async function buildIndianSectorMap() {
+  const now = Date.now();
+  if (_indSectors && (now - _indSectorsTs) < IND_SECTORS_TTL) return _indSectors;
+
+  const sectorMap = new Map();
+  for (const stock of FALLBACK_INDIA_STOCKS) {
+    if (!sectorMap.has(stock.sector)) sectorMap.set(stock.sector, []);
+    sectorMap.get(stock.sector).push({
+      symbol:    stock.symbol,
+      nseSymbol: stock.nseSymbol,
+      name:      stock.name,
+      sector:    stock.sector,
+    });
+  }
+
+  _indSectors   = sectorMap;
+  _indSectorsTs = now;
+  console.log(`Indian sector map built: ${sectorMap.size} sectors (hardcoded)`);
+  return sectorMap;
+}
+
+/**
+ * Fetch top US movers.
+ * Primary:  Yahoo screener (requires crumb) — dynamic, any stock.
+ * Fallback: chartToQuote for FALLBACK_US_STOCKS (no crumb needed) — always works.
+ */
+async function fetchTopUSMovers() {
+  // Primary: Yahoo screener when crumb is available
+  if (_crumb) {
+    const url = `${YAHOO1}/v1/finance/screener?formatted=false&lang=en-US&region=US&crumb=${enc(_crumb)}`;
+    const body = JSON.stringify({
+      offset: 0, size: 25,
+      sortField: "percentchange", sortType: "DESC",
+      quoteType: "EQUITY", topOperator: "AND",
+      query: {
+        operator: "AND",
+        operands: [
+          { operator: "OR", operands: [
+            { operator: "EQ", operands: ["exchange", "NMS"] },
+            { operator: "EQ", operands: ["exchange", "NYQ"] },
+          ]},
+          { operator: "GT", operands: ["intradayprice",        5]      },
+          { operator: "GT", operands: ["avgdailyvolume3month", 500000] },
+        ],
+      },
+      userId: "", userIdType: "guid",
+    });
+    try {
+      const resp = await fetch(url, {
+        method: "POST",
+        headers: { ...yahooHeaders(_cookies), "Content-Type": "application/json" },
+        body,
+      });
+      if (resp.ok) {
+        const j = await resp.json();
+        const quotes = j?.finance?.result?.[0]?.quotes ?? [];
+        const movers = quotes
+          .filter(q => q?.sector && Math.abs(q?.regularMarketChangePercent ?? 0) >= 0.5)
+          .slice(0, 15)
+          .map(q => ({
+            symbol:    q.symbol ?? "",
+            name:      q.longName ?? q.shortName ?? q.symbol ?? "",
+            changePct: q.regularMarketChangePercent ?? 0,
+            sector:    q.sector ?? "",
+            direction: (q.regularMarketChangePercent ?? 0) >= 0 ? "UP" : "DOWN",
+          }));
+        if (movers.length > 0) {
+          console.log(`US movers: screener returned ${movers.length}`);
+          return movers;
+        }
+      }
+    } catch (e) {
+      console.log("US movers screener error:", e.message);
+    }
+  }
+
+  // Fallback: chartToQuote for known US large-caps — no crumb needed
+  console.log("US movers: using fallback chartToQuote for known large-caps");
+  const results = await Promise.all(
+    FALLBACK_US_STOCKS.map(async ({ symbol, name, sector }) => {
+      const q = await chartToQuote(symbol);
+      if (!q || Math.abs(q.regularMarketChangePercent ?? 0) < 0.5) return null;
+      return {
+        symbol,
+        name:      q.longName || q.shortName || name,
+        changePct: q.regularMarketChangePercent ?? 0,
+        sector,
+        direction: (q.regularMarketChangePercent ?? 0) >= 0 ? "UP" : "DOWN",
+      };
+    })
+  );
+  const movers = results.filter(Boolean);
+  console.log(`US movers: fallback returned ${movers.length} movers`);
+  return movers;
+}
+
+function computeOverallBias(items) {
+  const weight = { "^DJI": 2, "^GSPC": 2, "^IXIC": 2, "^N225": 1, "^HSI": 1, "^FTSE": 1, "^NSEI": 1.5, "^NSEBANK": 1.5 };
+  let score = 0;
+  for (const { symbol, changePct } of items) {
+    const w = weight[symbol] ?? 1;
+    score += (changePct >= 0 ? 1 : -1) * w;
+  }
+  if (score > 2)  return "BULLISH";
+  if (score < -2) return "BEARISH";
+  return "NEUTRAL";
+}
+
+/**
+ * GET /global-trends
+ *
+ * Returns global market indices + impact cards linking foreign movers to Indian stocks.
+ * Full response cached 15 min in Worker memory. Indian sector map cached 1 hour.
+ */
+async function handleGlobalTrends() {
+  const now = Date.now();
+  if (_trendsBody && (now - _trendsTs) < TRENDS_TTL) {
+    return new Response(_trendsBody, { headers: { ...corsHeaders(), "X-Cache": "HIT" } });
+  }
+
+  // Fetch all data in parallel
+  const [globalQuotes, usMovers, allRssArticles, indSectorMap] = await Promise.all([
+    fetchGlobalIndexQuotes(),   // chartToQuote per-symbol — reliable for indices/forex/commodities
+    fetchTopUSMovers(),
+    fetchAllRssArticles(),
+    buildIndianSectorMap(),
+  ]);
+
+  // ── Bucket global indices by group ────────────────────────────────────────
+  const groups = { us: [], asia: [], india: [], commodities: [], forex: [] };
+  for (const q of globalQuotes) {
+    const meta = GLOBAL_INDEX_META[q.symbol];
+    if (!meta) continue;
+    groups[meta.group]?.push({
+      symbol:    q.symbol,
+      name:      meta.name,
+      price:     q.regularMarketPrice         ?? 0,
+      changePct: q.regularMarketChangePercent ?? 0,
+      direction: (q.regularMarketChangePercent ?? 0) >= 0 ? "UP" : "DOWN",
+    });
+  }
+
+  // ── Build impact cards ────────────────────────────────────────────────────
+  // One card per sector — pick the US mover with highest |changePct| per sector
+  const sectorBest = new Map();
+  for (const mover of usMovers) {
+    const existing = sectorBest.get(mover.sector);
+    if (!existing || Math.abs(mover.changePct) > Math.abs(existing.changePct)) {
+      sectorBest.set(mover.sector, mover);
+    }
+  }
+
+  const impacts = [];
+  for (const [sector, mover] of sectorBest) {
+    const indianStocks = indSectorMap.get(sector) ?? [];
+    if (indianStocks.length === 0) continue;
+
+    // News headlines that mention the company name or sector keywords
+    const terms = [
+      mover.name.split(" ").slice(0, 2).join(" "), // first two words of company name
+      mover.symbol.replace(/\.\w+$/, ""),           // ticker without exchange suffix
+      sector,
+    ].filter(t => t.length >= 3);
+    const headlines = allRssArticles
+      .filter(a => (now - a.publishedAt) <= MAX_TRENDS_NEWS_AGE_MS && isNewsRelevant(a.headline, terms))
+      .sort((a, b) => b.publishedAt - a.publishedAt)
+      .slice(0, 3)
+      .map(a => a.headline);
+
+    impacts.push({
+      foreignSymbol:    mover.symbol,
+      foreignName:      mover.name,
+      foreignChangePct: mover.changePct,
+      direction:        mover.direction,
+      sector:           sector,
+      impactDirection:  mover.direction === "UP" ? "POSITIVE" : "NEGATIVE",
+      indianStocks:     indianStocks.slice(0, 5),
+      newsHeadlines:    headlines,
+    });
+  }
+  // Biggest movers first
+  impacts.sort((a, b) => Math.abs(b.foreignChangePct) - Math.abs(a.foreignChangePct));
+
+  const biasInput = [...groups.us, ...groups.asia, ...groups.india];
+  const overallBias = computeOverallBias(biasInput);
+
+  const payload = {
+    us:          groups.us,
+    asia:        groups.asia,
+    india:       groups.india,
+    commodities: groups.commodities,
+    forex:       groups.forex,
+    impacts:     impacts.slice(0, 8),
+    overallBias: overallBias,
+    cachedAt:    now,
+  };
+
+  console.log(`GlobalTrends: indices=${globalQuotes.length} movers=${usMovers.length} impacts=${impacts.length} bias=${overallBias}`);
+  _trendsBody = JSON.stringify(payload);
+  _trendsTs   = now;
+  return new Response(_trendsBody, { headers: { ...corsHeaders(), "X-Cache": "MISS" } });
+}
+
 // ── Main entry point ──────────────────────────────────────────────────────────
 
 export default {
@@ -689,7 +1085,8 @@ export default {
       if (pathname === "/quotes")   return handleQuotes(searchParams, apiKey);
       if (pathname === "/history")  return handleHistory(searchParams, apiKey);
       if (pathname === "/profile")  return handleProfile(searchParams);
-      if (pathname === "/news")     return handleNews(searchParams);
+      if (pathname === "/news")          return handleNews(searchParams);
+      if (pathname === "/global-trends") return handleGlobalTrends();
       return jsonError(`Unknown endpoint: ${pathname}`, 404);
     } catch (e) {
       return jsonError(e.message, 500);

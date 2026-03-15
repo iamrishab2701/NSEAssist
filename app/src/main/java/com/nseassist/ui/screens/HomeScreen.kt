@@ -15,6 +15,7 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.ShowChart
+import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.TrendingDown
 import androidx.compose.material.icons.filled.TrendingUp
 import androidx.compose.material3.*
@@ -43,6 +44,7 @@ import com.nseassist.ui.viewmodel.UiState
 
 private enum class HomeTab(val label: String) {
     Market("Market"),
+    Trends("Trends"),
     Capital("Capital"),
     Search("Search"),
     Settings("Settings"),
@@ -52,6 +54,7 @@ private enum class HomeTab(val label: String) {
 @Composable
 fun HomeScreen(navController: NavController, vm: MainViewModel) {
     val marketState by vm.marketOverview.collectAsState()
+    val trendsState by vm.globalTrends.collectAsState()
     val aiSettings by vm.aiSettings.collectAsState()
     var capital by remember { mutableStateOf("") }
     var stockQuery by remember { mutableStateOf("") }
@@ -71,6 +74,11 @@ fun HomeScreen(navController: NavController, vm: MainViewModel) {
                             Icon(Icons.Default.Refresh, contentDescription = "Refresh")
                         }
                     }
+                    if (currentTab == HomeTab.Trends) {
+                        IconButton(onClick = { vm.refreshGlobalTrends() }) {
+                            Icon(Icons.Default.Refresh, contentDescription = "Refresh trends")
+                        }
+                    }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = CardDark),
             )
@@ -84,6 +92,7 @@ fun HomeScreen(navController: NavController, vm: MainViewModel) {
                         icon = {
                             when (tab) {
                                 HomeTab.Market   -> Icon(Icons.Filled.ShowChart, contentDescription = null)
+                                HomeTab.Trends   -> Icon(Icons.Filled.Public, contentDescription = null)
                                 HomeTab.Capital  -> Icon(Icons.Filled.CurrencyRupee, contentDescription = null)
                                 HomeTab.Search   -> Icon(Icons.Default.Search, contentDescription = null)
                                 HomeTab.Settings -> Icon(Icons.Default.Settings, contentDescription = null)
@@ -113,6 +122,10 @@ fun HomeScreen(navController: NavController, vm: MainViewModel) {
         ) {
             when (currentTab) {
                 HomeTab.Market -> MarketOverviewTab(marketState, onRetry = vm::loadMarketOverview)
+                HomeTab.Trends -> {
+                    androidx.compose.runtime.LaunchedEffect(Unit) { vm.loadGlobalTrends() }
+                    MarketTrendTab(trendsState, onRetry = vm::refreshGlobalTrends)
+                }
                 HomeTab.Capital -> CapitalInputCard(
                     capital = capital,
                     category = currentCategory,
