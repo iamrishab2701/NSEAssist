@@ -139,7 +139,7 @@ private fun SingleStockAiSheet(
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
-        containerColor = CardDark,
+        containerColor = SheetSurface,   // opaque — glass token was too transparent
         dragHandle = { BottomSheetDefaults.DragHandle(color = TextSecondary.copy(alpha = 0.4f)) },
     ) {
         Column(
@@ -369,7 +369,7 @@ private fun AiSingleStockResult(result: SingleStockAiAnalysis) {
 
     // ── Trade levels ──────────────────────────────────────────────────────────
     Card(
-        colors = CardDefaults.cardColors(containerColor = SurfaceDark),
+        colors = CardDefaults.cardColors(containerColor = CardSolid),
         modifier = Modifier.fillMaxWidth(),
     ) {
         Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -388,7 +388,7 @@ private fun AiSingleStockResult(result: SingleStockAiAnalysis) {
     // ── Reason ────────────────────────────────────────────────────────────────
     if (result.reason.isNotBlank()) {
         Card(
-            colors = CardDefaults.cardColors(containerColor = SurfaceDark),
+            colors = CardDefaults.cardColors(containerColor = CardSolid),
             modifier = Modifier.fillMaxWidth(),
         ) {
             Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {

@@ -3,6 +3,7 @@ package com.nseassist.ui.theme
 import android.app.Activity
 import android.os.Build
 import androidx.compose.foundation.isSystemInDarkTheme
+import com.nseassist.data.local.ThemeMode
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
@@ -71,9 +72,15 @@ private val AppTypography = Typography(
 // ── Theme entry point ─────────────────────────────────────────────────────────
 @Composable
 fun NSEAssistTheme(
-    darkTheme: Boolean = isSystemInDarkTheme(),
+    themeMode: ThemeMode = ThemeMode.SYSTEM,
     content:   @Composable () -> Unit,
 ) {
+    val systemDark = isSystemInDarkTheme()
+    val darkTheme  = when (themeMode) {
+        ThemeMode.DARK   -> true
+        ThemeMode.LIGHT  -> false
+        ThemeMode.SYSTEM -> systemDark
+    }
     // Material You dynamic colors on API 31+ (Pixel wallpaper-adaptive)
     val colorScheme = when {
         Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {

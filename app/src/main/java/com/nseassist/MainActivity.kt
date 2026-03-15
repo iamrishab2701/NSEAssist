@@ -4,7 +4,10 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.viewModels
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
@@ -21,21 +24,26 @@ import com.nseassist.ui.theme.NSEAssistTheme
 import com.nseassist.ui.viewmodel.MainViewModel
 
 class MainActivity : ComponentActivity() {
+
+    // Lift VM to activity level so themeMode can drive NSEAssistTheme,
+    // which wraps the entire Compose content tree.
+    private val vm: MainViewModel by viewModels()
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setContent {
-            NSEAssistTheme {
+            val themeMode by vm.themeMode.collectAsState()
+            NSEAssistTheme(themeMode = themeMode) {
                 val navController = rememberNavController()
-                AppNavHost(navController)
+                AppNavHost(navController, vm)
             }
         }
     }
 }
 
 @Composable
-fun AppNavHost(navController: NavHostController) {
-    val vm: MainViewModel = viewModel()
+fun AppNavHost(navController: NavHostController, vm: MainViewModel) {
     NavHost(navController = navController, startDestination = "home") {
         composable("home") {
             HomeScreen(navController, vm)

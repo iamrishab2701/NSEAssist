@@ -4,6 +4,7 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.nseassist.NSEAssistApp
+import com.nseassist.data.local.ThemeMode
 import com.nseassist.data.model.AiAnalysisReport
 import com.nseassist.data.model.AiProvider
 import com.nseassist.data.model.AiProviderConfig
@@ -34,6 +35,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val repo = appContainer.repository
     private val aiSettingsStore = appContainer.aiSettingsStore
     private val aiAnalysisService = appContainer.aiAnalysisService
+    private val themeStore = appContainer.themeStore
 
     // ── Market Overview ──────────────────────────────────────────────────────────
     private val _marketOverview = MutableStateFlow<UiState<MarketOverview>>(UiState.Loading)
@@ -57,6 +59,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     private val _aiSettings = MutableStateFlow(aiSettingsStore.load())
     val aiSettings: StateFlow<AiSettings> = _aiSettings
+
+    // ── Theme mode — persisted preference, drives NSEAssistTheme ─────────────────
+    private val _themeMode = MutableStateFlow(themeStore.load())
+    val themeMode: StateFlow<ThemeMode> = _themeMode
 
     private val _aiAnalysis = MutableStateFlow<UiState<AiAnalysisReport>?>(null)
     val aiAnalysis: StateFlow<UiState<AiAnalysisReport>?> = _aiAnalysis
@@ -367,6 +373,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun clearExportState() {
         _exportState.value = ExportState.Idle
+    }
+
+    fun setThemeMode(mode: ThemeMode) {
+        _themeMode.value = mode
+        themeStore.save(mode)
     }
 }
 

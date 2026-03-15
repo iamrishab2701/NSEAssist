@@ -1,5 +1,6 @@
 package com.nseassist.ui.screens
 
+import androidx.compose.foundation.BorderStroke
 import com.nseassist.BuildConfig
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -30,6 +31,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.navigation.NavController
 import androidx.compose.runtime.saveable.rememberSaveable
+import com.nseassist.data.local.ThemeMode
 import com.nseassist.data.model.AiProvider
 import com.nseassist.data.model.AiProviderConfig
 import com.nseassist.data.model.AiSettings
@@ -130,7 +132,14 @@ fun HomeScreen(navController: NavController, vm: MainViewModel) {
                         if (symbol.isNotBlank()) navController.navigate("stock/$symbol")
                     },
                 )
-                HomeTab.Settings -> AiSettingsTab(onNavigate = { navController.navigate(it) })
+                HomeTab.Settings -> {
+                    val themeMode by vm.themeMode.collectAsState()
+                    AiSettingsTab(
+                        themeMode  = themeMode,
+                        onTheme    = vm::setThemeMode,
+                        onNavigate = { navController.navigate(it) },
+                    )
+                }
             }
 
             Text(
@@ -345,8 +354,64 @@ private fun CapitalInputCard(
 }
 
 @Composable
-private fun AiSettingsTab(onNavigate: (String) -> Unit) {
+private fun AiSettingsTab(
+    themeMode:  ThemeMode,
+    onTheme:    (ThemeMode) -> Unit,
+    onNavigate: (String) -> Unit,
+) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+
+        // ── Appearance ────────────────────────────────────────────────────────
+        Card(
+            colors = CardDefaults.cardColors(containerColor = CardDark),
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text("Appearance", fontWeight = FontWeight.SemiBold, fontSize = 15.sp, color = TextPrimary)
+                Text("Choose how the app looks", fontSize = 12.sp, color = TextSecondary)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    ThemeMode.values().forEach { mode ->
+                        val selected = mode == themeMode
+                        val label = when (mode) {
+                            ThemeMode.SYSTEM -> "System"
+                            ThemeMode.LIGHT  -> "Light"
+                            ThemeMode.DARK   -> "Dark"
+                        }
+                        val icon = when (mode) {
+                            ThemeMode.SYSTEM -> "⚙"
+                            ThemeMode.LIGHT  -> "☀"
+                            ThemeMode.DARK   -> "🌙"
+                        }
+                        Surface(
+                            onClick = { onTheme(mode) },
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(10.dp),
+                            color = if (selected) BluePrimary else CardDark,
+                            border = if (!selected) BorderStroke(0.5.dp, DividerColor) else null,
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(vertical = 10.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy(4.dp),
+                            ) {
+                                Text(icon, fontSize = 16.sp)
+                                Text(
+                                    label,
+                                    fontSize = 11.sp,
+                                    fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                                    color = if (selected) Color.White else TextSecondary,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // ── Navigation rows ───────────────────────────────────────────────────
         SettingsMenuRow(
             title = "Model Configuration",
             subtitle = "Add or update your AI provider API keys",
