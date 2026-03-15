@@ -471,6 +471,25 @@ class NSERepository {
         }
     }
 
+    /** Standalone news fetch — called from detail screen after stock data is already shown. */
+    suspend fun fetchNewsForStock(
+        symbol: String,
+        name: String,
+        sector: String,
+        industry: String,
+    ): com.nseassist.data.model.NewsResult? = withContext(Dispatchers.IO) {
+        runCatching {
+            kotlinx.coroutines.withTimeoutOrNull(18_000L) {
+                NewsClient.fetchNews(
+                    stockSymbol  = symbol.removeSuffix(".NS"),
+                    companyName  = name,
+                    sector       = sector,
+                    industry     = industry,
+                )
+            }
+        }.getOrNull()
+    }
+
     private fun newsImpact(news: com.nseassist.data.model.NewsResult?): Int {
         if (news == null) return 0
         var impact = when (news.stockSentiment) {

@@ -9,13 +9,17 @@ import com.nseassist.data.model.AiProviderConfig
 import com.nseassist.data.model.AiRecommendedStock
 import com.nseassist.data.model.AiStockAllocation
 import com.nseassist.data.model.AiTradeDirection
+import com.nseassist.data.model.NewsResult
 import com.nseassist.data.model.ScanCategory
+import com.nseassist.data.model.SingleStockAiAnalysis
 import com.nseassist.data.model.StockData
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
-import java.io.IOException
+import java.time.ZoneId
+import java.time.ZonedDateTime
+import java.time.format.DateTimeFormatter
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -28,6 +32,8 @@ class AiAnalysisService {
         .callTimeout(180, TimeUnit.SECONDS)
         .build()
 
+    // ── Batch multi-stock analysis (AI Report screen) ─────────────────────────────
+
     suspend fun analyzeStocks(
         config: AiProviderConfig,
         capital: Double,
@@ -37,23 +43,44 @@ class AiAnalysisService {
         require(config.apiKey.isNotBlank()) { "API key missing for ${config.provider.label}" }
         require(stocks.isNotEmpty()) { "No stocks available for AI analysis" }
 
-        val prompt = buildPrompt(capital, category, stocks)
-        val rawResponse = when (config.provider) {
-            AiProvider.OPENAI -> callOpenAi(config, prompt)
-            AiProvider.GEMINI -> callGemini(config, prompt)
-            AiProvider.OPENROUTER -> callOpenRouter(config, prompt)
-            AiProvider.GROQ -> callGroq(config, prompt)
-        }
-
+        val prompt = buildBatchPrompt(capital, category, stocks)
+        val rawResponse = callProvider(config, SYSTEM_PROMPT, prompt)
         parseReport(rawResponse, config)
     } }
 
-    private fun callOpenAi(config: AiProviderConfig, prompt: String): String {
+    // ── Single-stock deep-dive (Stock Detail screen FAB) ──────────────────────────
+
+    suspend fun analyzeSingleStock(
+        config: AiProviderConfig,
+        capital: Double,
+        stock: StockData,
+        news: NewsResult?,
+    ): Result<SingleStockAiAnalysis> = withContext(Dispatchers.IO) { runCatching {
+        require(config.apiKey.isNotBlank()) { "API key missing for ${config.provider.label}" }
+
+        val prompt = buildSingleStockPrompt(capital, stock, news)
+        val rawResponse = callProvider(config, SINGLE_STOCK_SYSTEM_PROMPT, prompt)
+        parseSingleStockReport(rawResponse, config)
+    } }
+
+    // ── Provider router ────────────────────────────────────────────────────────────
+
+    private fun callProvider(config: AiProviderConfig, systemPrompt: String, prompt: String): String =
+        when (config.provider) {
+            AiProvider.OPENAI      -> callOpenAi(config, systemPrompt, prompt)
+            AiProvider.GEMINI      -> callGemini(config, systemPrompt, prompt)
+            AiProvider.OPENROUTER  -> callOpenRouter(config, systemPrompt, prompt)
+            AiProvider.GROQ        -> callGroq(config, systemPrompt, prompt)
+        }
+
+    // ── Provider implementations ───────────────────────────────────────────────────
+
+    private fun callOpenAi(config: AiProviderConfig, systemPrompt: String, prompt: String): String {
         val body = gson.toJson(
             mapOf(
                 "model" to config.model,
                 "messages" to listOf(
-                    mapOf("role" to "system", "content" to SYSTEM_PROMPT),
+                    mapOf("role" to "system", "content" to systemPrompt),
                     mapOf("role" to "user", "content" to prompt),
                 ),
                 "temperature" to 0.2,
@@ -79,11 +106,11 @@ class AiAnalysisService {
         }
     }
 
-    private fun callGemini(config: AiProviderConfig, prompt: String): String {
+    private fun callGemini(config: AiProviderConfig, systemPrompt: String, prompt: String): String {
         val body = gson.toJson(
             mapOf(
                 "systemInstruction" to mapOf(
-                    "parts" to listOf(mapOf("text" to SYSTEM_PROMPT))
+                    "parts" to listOf(mapOf("text" to systemPrompt))
                 ),
                 "contents" to listOf(
                     mapOf("parts" to listOf(mapOf("text" to prompt)))
@@ -114,12 +141,12 @@ class AiAnalysisService {
         }
     }
 
-    private fun callOpenRouter(config: AiProviderConfig, prompt: String): String {
+    private fun callOpenRouter(config: AiProviderConfig, systemPrompt: String, prompt: String): String {
         val body = gson.toJson(
             mapOf(
                 "model" to config.model,
                 "messages" to listOf(
-                    mapOf("role" to "system", "content" to SYSTEM_PROMPT),
+                    mapOf("role" to "system", "content" to systemPrompt),
                     mapOf("role" to "user", "content" to prompt),
                 ),
                 "temperature" to 0.2,
@@ -147,12 +174,12 @@ class AiAnalysisService {
         }
     }
 
-    private fun callGroq(config: AiProviderConfig, prompt: String): String {
+    private fun callGroq(config: AiProviderConfig, systemPrompt: String, prompt: String): String {
         val body = gson.toJson(
             mapOf(
                 "model" to config.model,
                 "messages" to listOf(
-                    mapOf("role" to "system", "content" to SYSTEM_PROMPT),
+                    mapOf("role" to "system", "content" to systemPrompt),
                     mapOf("role" to "user", "content" to prompt),
                 ),
                 "temperature" to 0.2,
@@ -177,6 +204,8 @@ class AiAnalysisService {
                 ?: error("Empty Groq response")
         }
     }
+
+    // ── Parsers ────────────────────────────────────────────────────────────────────
 
     private fun parseReport(rawJson: String, config: AiProviderConfig): AiAnalysisReport {
         val json = JsonParser.parseString(extractJson(rawJson)).asJsonObject
@@ -210,6 +239,25 @@ class AiAnalysisService {
         )
     }
 
+    private fun parseSingleStockReport(rawJson: String, config: AiProviderConfig): SingleStockAiAnalysis {
+        val json = JsonParser.parseString(extractJson(rawJson)).asJsonObject
+        return SingleStockAiAnalysis(
+            provider   = config.provider,
+            model      = config.model,
+            verdict    = json.get("verdict")?.asString    ?: "NO-GO",
+            direction  = json.get("direction")?.asString  ?: "SKIP",
+            entry      = json.get("entry")?.asString      ?: "—",
+            target     = json.get("target")?.asString     ?: "—",
+            stopLoss   = json.get("stop_loss")?.asString  ?: "—",
+            quantity   = json.get("quantity")?.asInt      ?: 0,
+            rrRatio    = json.get("rr_ratio")?.asString   ?: "—",
+            confidence = json.get("confidence")?.asInt    ?: 0,
+            reason     = json.get("reason")?.asString     ?: "No analysis provided.",
+            risk       = json.get("risk")?.asString       ?: "No specific risk noted.",
+            disclaimer = json.get("disclaimer")?.asString ?: DEFAULT_DISCLAIMER,
+        )
+    }
+
     private fun JsonObject.toRecommendedStock(): AiRecommendedStock {
         return AiRecommendedStock(
             symbol = get("symbol")?.asString.orEmpty(),
@@ -225,9 +273,9 @@ class AiAnalysisService {
     }
 
     private fun String.toTradeDirection(): AiTradeDirection = when (uppercase()) {
-        "LONG" -> AiTradeDirection.LONG
+        "LONG"  -> AiTradeDirection.LONG
         "SHORT" -> AiTradeDirection.SHORT
-        else -> AiTradeDirection.NO_TRADE
+        else    -> AiTradeDirection.NO_TRADE
     }
 
     private fun extractJson(text: String): String {
@@ -237,7 +285,158 @@ class AiAnalysisService {
         return text.substring(start, end + 1)
     }
 
-    private fun buildPrompt(capital: Double, category: ScanCategory, stocks: List<StockData>): String {
+    // ── Prompt builders ────────────────────────────────────────────────────────────
+
+    private fun buildSingleStockPrompt(capital: Double, stock: StockData, news: NewsResult?): String {
+        val qty     = if (stock.ltp > 0) kotlin.math.floor(capital / stock.ltp).toInt() else 0
+        val maxLoss = capital * 0.02
+
+        // ── IST time + market status ──────────────────────────────────────────────
+        val ist     = ZoneId.of("Asia/Kolkata")
+        val now     = ZonedDateTime.now(ist)
+        val timeStr = now.format(DateTimeFormatter.ofPattern("hh:mm a"))   // e.g. 10:35 AM
+        val dateStr = now.format(DateTimeFormatter.ofPattern("EEE, dd MMM yyyy"))
+        val dow     = now.dayOfWeek.value                                  // 1=Mon … 7=Sun
+        val mins    = now.hour * 60 + now.minute
+        val marketStatus = when {
+            dow >= 6                  -> "CLOSED — Weekend (NSE is shut)"
+            mins in 540..554          -> "PRE-OPEN (9:00–9:15 AM IST — orders accepted, no execution)"
+            mins in 555..929          -> "LIVE ✅ (9:15 AM–3:30 PM IST — market is open right now)"
+            mins in 930..960          -> "POST-MARKET (3:30–4:00 PM IST — closing session)"
+            else                      -> "CLOSED — Outside market hours"
+        }
+        val sessionNote = when {
+            dow >= 6                  -> "This analysis is for the NEXT trading session (Monday opening)."
+            mins < 555                -> "Market opens at 9:15 AM IST. This analysis is for TODAY's opening."
+            mins in 555..929          -> "Market is LIVE. Entry prices and signals are actionable RIGHT NOW."
+            else                      -> "Market is closed for today. This analysis applies to TOMORROW's session."
+        }
+
+        return buildString {
+            appendLine("=== SINGLE STOCK INTRADAY ANALYSIS ===")
+            appendLine()
+            appendLine("--- TIME & MARKET STATUS ---")
+            appendLine("Current Time (IST) : $timeStr  |  $dateStr")
+            appendLine("NSE Market Status  : $marketStatus")
+            appendLine("Session Context    : $sessionNote")
+            appendLine()
+            appendLine("Capital Available : Rs ${"%.2f".format(capital)}")
+            appendLine("Max Loss (2% rule): Rs ${"%.2f".format(maxLoss)}")
+            appendLine("Max Qty at LTP    : $qty shares")
+            appendLine()
+
+            appendLine("--- IDENTITY ---")
+            appendLine("Symbol   : ${stock.symbol}")
+            appendLine("Company  : ${stock.name}")
+            appendLine("Sector   : ${stock.sector.ifBlank { "Unknown" }}")
+            appendLine("Industry : ${stock.industry.ifBlank { "Unknown" }}")
+            appendLine()
+
+            appendLine("--- PRICE DATA ---")
+            appendLine("LTP      : Rs ${"%.2f".format(stock.ltp)}")
+            appendLine("Change   : ${"%.2f".format(stock.change)} (${"%.2f".format(stock.changePct)}%)")
+            appendLine("Open     : Rs ${"%.2f".format(stock.open)}")
+            appendLine("Day High : Rs ${"%.2f".format(stock.dayHigh)}")
+            appendLine("Day Low  : Rs ${"%.2f".format(stock.dayLow)}")
+            appendLine("VWAP     : Rs ${"%.2f".format(stock.vwap)}")
+            appendLine("Above VWAP: ${stock.aboveVwap}")
+            appendLine("Gap Type : ${stock.gapType}")
+            appendLine()
+
+            appendLine("--- VOLUME ---")
+            appendLine("Volume Today   : ${stock.volume}")
+            appendLine("Avg Volume 30d : ${stock.avgVolume}")
+            appendLine("Volume Spike   : ${stock.volumeSpike}  (spike = 1.5x+ average)")
+            appendLine()
+
+            appendLine("--- TECHNICAL INDICATORS ---")
+            appendLine("RSI (14)     : ${"%.1f".format(stock.rsi)}  (sweet spot 45-65, >70 overbought, <30 oversold)")
+            appendLine("EMA 20       : Rs ${"%.2f".format(stock.ema20)}  [Price ${if (stock.ltp > stock.ema20) "ABOVE" else "BELOW"}]")
+            appendLine("EMA 50       : Rs ${"%.2f".format(stock.ema50)}  [EMA20 ${if (stock.ema20 > stock.ema50) "ABOVE → BULLISH STRUCTURE" else "BELOW → BEARISH STRUCTURE"}]")
+            appendLine("MACD Line    : ${"%.4f".format(stock.macdLine)}")
+            appendLine("MACD Signal  : ${"%.4f".format(stock.macdSignal)}")
+            appendLine("MACD Status  : ${if (stock.macdLine > stock.macdSignal) "BULLISH (MACD > Signal)" else "BEARISH (MACD < Signal)"}")
+            if (stock.bollingerUpper > 0.0) {
+                val bbPos = when {
+                    stock.ltp > stock.bollingerUpper -> "ABOVE_UPPER — overbought risk"
+                    stock.ltp < stock.bollingerLower -> "BELOW_LOWER — oversold / bounce candidate"
+                    stock.ltp > stock.bollingerMiddle -> "ABOVE_MID — mild bullish"
+                    else -> "BELOW_MID — mild bearish"
+                }
+                appendLine("Bollinger Upper : Rs ${"%.2f".format(stock.bollingerUpper)}")
+                appendLine("Bollinger Mid   : Rs ${"%.2f".format(stock.bollingerMiddle)}")
+                appendLine("Bollinger Lower : Rs ${"%.2f".format(stock.bollingerLower)}")
+                appendLine("Bollinger Pos   : $bbPos")
+            }
+            if (stock.adx > 0.0) {
+                val adxStr = when {
+                    stock.adx >= 40.0 -> "STRONG (>=40)"
+                    stock.adx >= 25.0 -> "TRENDING (>=25)"
+                    else              -> "WEAK / CHOPPY (<25)"
+                }
+                appendLine("ADX             : ${"%.1f".format(stock.adx)}  [$adxStr]")
+                appendLine("DI+             : ${"%.1f".format(stock.adxDiPlus)}")
+                appendLine("DI-             : ${"%.1f".format(stock.adxDiMinus)}")
+                appendLine("ADX Direction   : ${if (stock.adxDiPlus > stock.adxDiMinus) "BULLISH (DI+ > DI-)" else "BEARISH (DI- > DI+)"}")
+            }
+            appendLine()
+
+            appendLine("--- CANDLESTICK PATTERN ---")
+            appendLine("Pattern : ${stock.candlePattern}")
+            if (stock.candlePattern != "NONE") {
+                appendLine("Signal  : ${stock.candleSignal}")
+                if (stock.candlePatternLabel.isNotBlank()) appendLine("Meaning : ${stock.candlePatternLabel}")
+            }
+            appendLine()
+
+            appendLine("--- TREND ANALYSIS ---")
+            appendLine("6-Month Trend  : ${stock.trend6Month}")
+            appendLine("2-Week Trend   : ${stock.trend2Week}")
+            appendLine("Trend Signal   : ${stock.trendSignalType}")
+            if (stock.trendSignalLabel.isNotBlank()) appendLine("Signal Detail  : ${stock.trendSignalLabel}")
+            appendLine("Streak Length  : ${stock.streakDays} days")
+            appendLine()
+
+            appendLine("--- ML PRICE PREDICTION ---")
+            appendLine("Direction            : ${stock.predictedDirection}")
+            appendLine("Predicted High (day) : Rs ${"%.2f".format(stock.predictedHigh)}")
+            appendLine("Predicted Low (day)  : Rs ${"%.2f".format(stock.predictedLow)}")
+            appendLine("Prediction Confidence: ${stock.predictionConfidence}%")
+            appendLine("ATR (14d avg range)  : Rs ${"%.2f".format(stock.atr)}")
+            appendLine()
+
+            appendLine("--- SUPPORT & RESISTANCE (20d) ---")
+            appendLine("Support    : Rs ${"%.2f".format(stock.support)}")
+            appendLine("Resistance : Rs ${"%.2f".format(stock.resistance)}")
+            if (stock.resistance > 0) {
+                val gapToRes = (stock.resistance - stock.ltp) / stock.resistance * 100
+                appendLine("Gap to Resistance : ${"%.1f".format(gapToRes)}%")
+            }
+            appendLine()
+
+            appendLine("--- SCORING ---")
+            appendLine("Technical Score : ${"%.0f".format(stock.score)}/100")
+            appendLine("System Signal   : ${stock.optionAction}")
+            appendLine()
+
+            news?.let { n ->
+                appendLine("--- LIVE NEWS (Last 24h) ---")
+                appendLine("Overall Sentiment : ${n.sentiment.name}")
+                appendLine("Stock Sentiment   : ${n.stockSentiment.name} (${n.stockArticleCount} articles)")
+                appendLine("Sector Sentiment  : ${n.sectorSentiment.name} (${n.sectorArticleCount} articles)")
+                appendLine("Latest Headline   : ${n.headline}")
+                appendLine("News Age          : ${n.ageText}")
+                if (n.articles.isNotEmpty()) {
+                    appendLine("Top Headlines:")
+                    n.articles.take(3).forEach { a ->
+                        appendLine("  • [${a.sentiment.name}] ${a.headline}  —  ${a.source} (${a.ageText})")
+                    }
+                }
+            } ?: appendLine("--- NEWS: Not yet loaded ---")
+        }.trimEnd()
+    }
+
+    private fun buildBatchPrompt(capital: Double, category: ScanCategory, stocks: List<StockData>): String {
         val stockLines = stocks.joinToString("\n") { stock ->
             buildString {
                 append("- ${stock.symbol}")
@@ -318,6 +517,8 @@ class AiAnalysisService {
     companion object {
         private val JSON = "application/json".toMediaType()
         private const val DEFAULT_DISCLAIMER = "AI suggestions are informational only and not financial advice."
+
+        // ── Batch analysis system prompt ──────────────────────────────────────────
         private const val SYSTEM_PROMPT = """
 You are an intraday stock analysis assistant. Use only the stock list provided by the user. Never invent stocks, prices, or signals.
 
@@ -389,6 +590,47 @@ Rules:
 - Candle patterns, Bollinger position, ADX strength, and news together should inform quality of setup.
 - Confidence must be an integer from 0 to 100.
 - Keep rationale concise and beginner-friendly.
+        """
+
+        // ── Single-stock system prompt — strict GO / NO-GO verdict ────────────────
+        private const val SINGLE_STOCK_SYSTEM_PROMPT = """
+You are a strict intraday trading advisor for a beginner NSE trader with limited capital.
+Analyze ALL data provided and return a precise, honest, GO or NO-GO verdict for today's session.
+
+NON-NEGOTIABLE RULES:
+- The prompt includes "Current Time (IST)" and "NSE Market Status". You MUST read these carefully.
+- If market is LIVE: signals and entry prices are actionable right now. Say so in your reason.
+- If market is CLOSED or WEEKEND: your analysis is for the NEXT session. Clearly state this in your reason — e.g. "Market is closed. This plan is for tomorrow's opening." Do NOT say "trade now."
+- If market is PRE-OPEN (9:00–9:15 AM): advise watching the opening range before entering.
+- verdict must be "GO" or "NO-GO" only.
+- "GO" requires ALL of: confidence >= 65 AND R:R >= 1.5 AND quantity >= 1 AND stock LTP <= capital.
+- "NO-GO" if any condition fails, or if setup is unclear, choppy, or risky for a beginner.
+- direction must be "BUY", "SELL", or "SKIP". Use SKIP only for NO-GO verdicts.
+- entry must be a specific narrow price range like "Rs 847 - Rs 852". Never vague.
+- target and stop_loss must include percentage like "Rs 875 (+3.3%)" and "Rs 835 (-1.4%)".
+- quantity = floor(capital / entry_midpoint), then reduced so max_loss = quantity * (entry - stop_loss) <= 2% of capital.
+- rr_ratio must be "1 : X.X" calculated as (target - entry) / (entry - stop_loss). Must be >= 1.5 for GO.
+- confidence is 0-100 based on ALL signals holistically. Not just one indicator.
+- reason is EXACTLY 2 lines maximum. Only technical facts. No speculation. No generic statements.
+- risk is exactly 1 sentence — one specific thing that would invalidate this setup. Not a generic warning.
+- For NO-GO: still provide entry/target/stop_loss as "N/A", quantity as 0, rr_ratio as "N/A".
+- Use ONLY the data provided. Never invent prices, levels, or signals not in the input.
+- Keep language simple and beginner-friendly.
+
+Return ONLY valid JSON — no markdown, no explanation, no extra text:
+{
+  "verdict": "GO",
+  "direction": "BUY",
+  "entry": "Rs 847 - Rs 852",
+  "target": "Rs 875 (+3.3%)",
+  "stop_loss": "Rs 835 (-1.4%)",
+  "quantity": 12,
+  "rr_ratio": "1 : 2.4",
+  "confidence": 78,
+  "reason": "Price above VWAP with RSI at 58 in sweet spot and EMA20 > EMA50 bullish structure. Volume spike of 2.1x confirms institutional participation in the move.",
+  "risk": "Exit immediately if price closes a 5-minute candle below Rs 840 — that would break the VWAP support and invalidate the setup.",
+  "disclaimer": "AI suggestions are informational only and not SEBI-registered financial advice."
+}
         """
     }
 }

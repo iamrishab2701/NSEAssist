@@ -9,7 +9,9 @@ import com.nseassist.data.model.AiProvider
 import com.nseassist.data.model.AiProviderConfig
 import com.nseassist.data.model.AiSettings
 import com.nseassist.data.model.MarketOverview
+import com.nseassist.data.model.NewsResult
 import com.nseassist.data.model.ScanCategory
+import com.nseassist.data.model.SingleStockAiAnalysis
 import com.nseassist.data.model.StockData
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -45,11 +47,23 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val _stockDetail = MutableStateFlow<UiState<StockData>>(UiState.Loading)
     val stockDetail: StateFlow<UiState<StockData>> = _stockDetail
 
+    // ── Stock News — loaded independently so technical data shows instantly ───────
+    private val _stockNews = MutableStateFlow<UiState<NewsResult?>>(UiState.Loading)
+    val stockNews: StateFlow<UiState<NewsResult?>> = _stockNews
+
+    // ── Capital — saved when user scans, pre-fills single-stock AI analysis ───────
+    private val _capital = MutableStateFlow(0.0)
+    val capital: StateFlow<Double> = _capital
+
     private val _aiSettings = MutableStateFlow(aiSettingsStore.load())
     val aiSettings: StateFlow<AiSettings> = _aiSettings
 
     private val _aiAnalysis = MutableStateFlow<UiState<AiAnalysisReport>?>(null)
     val aiAnalysis: StateFlow<UiState<AiAnalysisReport>?> = _aiAnalysis
+
+    // ── Single Stock AI Analysis (Stock Detail screen) ────────────────────────────
+    private val _singleStockAnalysis = MutableStateFlow<UiState<SingleStockAiAnalysis>?>(null)
+    val singleStockAnalysis: StateFlow<UiState<SingleStockAiAnalysis>?> = _singleStockAnalysis
 
     // ── Deep Enrich Progress (phase 2 of scan — null when idle) ─────────────────
     private val _deepEnrichProgress = MutableStateFlow<Pair<Int, Int>?>(null)
@@ -85,6 +99,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun scanStocks(capital: Double, category: ScanCategory) {
+        _capital.value = capital   // store so single-stock AI analysis can pre-fill it
         val now = System.currentTimeMillis()
         val cached = capital == scanCacheCapital &&
                      category == scanCacheCategory &&
@@ -155,29 +170,54 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun loadStockDetail(symbol: String) {
         val now = System.currentTimeMillis()
 
-        // Priority 1: stock was already deep-enriched in Phase 2 of the scan — use it instantly
+        // Priority 1: stock already deep-enriched in Phase 2 — show instantly,
+        // then load news separately (news is never fetched during Phase 2 batch scan)
         val enrichedFromScan = (_scanResults.value as? UiState.Success)?.data
             ?.firstOrNull { it.symbol == symbol && it.isDeepEnriched }
         if (enrichedFromScan != null) {
-            _stockDetail.value = UiState.Success(enrichedFromScan)
+            _stockDetail.value   = UiState.Success(enrichedFromScan)
             detailCacheSymbol    = symbol
             detailCacheTimestamp = now
+            loadNewsForStock(enrichedFromScan)
             return
         }
 
-        // Priority 2: same stock re-opened within 5 min (e.g. stock not in top 15)
+        // Priority 2: same stock re-opened within 5 min — technical data instant,
+        // but always refresh news (intraday news can change any minute)
         val cached = symbol == detailCacheSymbol &&
                      (now - detailCacheTimestamp) < DETAIL_CACHE_TTL &&
                      _stockDetail.value is UiState.Success
-        if (cached) return
+        if (cached) {
+            (_stockDetail.value as? UiState.Success)?.data?.let { loadNewsForStock(it) }
+            return
+        }
 
-        // Priority 3: fresh network fetch (stock was NOT in Phase 2 top-15)
+        // Priority 3: fresh network fetch (stock NOT in Phase 2 top-15)
         detailCacheSymbol    = symbol
         detailCacheTimestamp = now
         viewModelScope.launch {
             _stockDetail.value = UiState.Loading
-            _stockDetail.value = repo.analyseStock(symbol, fetchNews = true)   // news shown on detail screen
-                .fold(onSuccess = { UiState.Success(it) }, onFailure = { UiState.Error(it.message ?: "Analysis failed") })
+            val result = repo.analyseStock(symbol, fetchNews = false)  // technical only — fast
+            _stockDetail.value = result.fold(
+                onSuccess = { UiState.Success(it) },
+                onFailure = { UiState.Error(it.message ?: "Analysis failed") }
+            )
+            // After technical data is shown, fetch news in background
+            result.getOrNull()?.let { loadNewsForStock(it) }
+        }
+    }
+
+    /** Fetches news independently — never blocks technical data display. */
+    fun loadNewsForStock(stock: StockData) {
+        _stockNews.value = UiState.Loading
+        viewModelScope.launch {
+            val news = repo.fetchNewsForStock(
+                symbol   = stock.symbol,
+                name     = stock.name,
+                sector   = stock.sector,
+                industry = stock.industry,
+            )
+            _stockNews.value = UiState.Success(news)
         }
     }
 
@@ -218,6 +258,36 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun clearAiAnalysis() {
         _aiAnalysis.value = null
+    }
+
+    /**
+     * Run a deep single-stock AI analysis for the stock currently shown on StockDetailScreen.
+     * Uses all technical data + live news already loaded on that screen.
+     */
+    fun analyzeCurrentStockWithAi(provider: AiProvider, capital: Double) {
+        val stock = (_stockDetail.value as? UiState.Success)?.data ?: return
+        val news  = (_stockNews.value  as? UiState.Success)?.data
+
+        val config = _aiSettings.value.providers
+            .firstOrNull { it.provider == provider && it.apiKey.isNotBlank() }
+        if (config == null) {
+            _singleStockAnalysis.value = UiState.Error("Add ${provider.label} API key in Settings → Model Configuration first")
+            return
+        }
+
+        viewModelScope.launch {
+            _singleStockAnalysis.value = UiState.Loading
+            _singleStockAnalysis.value = aiAnalysisService
+                .analyzeSingleStock(config, capital, stock, news)
+                .fold(
+                    onSuccess = { UiState.Success(it) },
+                    onFailure = { UiState.Error(it.message ?: "AI analysis failed") },
+                )
+        }
+    }
+
+    fun clearSingleStockAnalysis() {
+        _singleStockAnalysis.value = null
     }
 
     // ── Shared deep enrichment for top 20 stocks ─────────────────────────────────

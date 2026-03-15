@@ -9,6 +9,7 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.CurrencyRupee
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
@@ -128,7 +129,7 @@ fun HomeScreen(navController: NavController, vm: MainViewModel) {
                         if (symbol.isNotBlank()) navController.navigate("stock/$symbol")
                     },
                 )
-                HomeTab.Settings -> AiSettingsTab(aiSettings = aiSettings, onSave = vm::upsertAiProvider)
+                HomeTab.Settings -> AiSettingsTab(onNavigate = { navController.navigate(it) })
             }
 
             Text(
@@ -342,11 +343,44 @@ private fun CapitalInputCard(
 }
 
 @Composable
-private fun AiSettingsTab(aiSettings: AiSettings, onSave: (AiProvider, String, String) -> Unit) {
-    Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
-        Text("Bring your own AI key", color = TextSecondary, fontSize = 12.sp)
-        aiSettings.providers.forEach { config ->
-            AiProviderSettingsCard(config = config, onSave = onSave)
+private fun AiSettingsTab(onNavigate: (String) -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        SettingsMenuRow(
+            title = "Model Configuration",
+            subtitle = "Add or update your AI provider API keys",
+            onClick = { onNavigate("settings/model-config") },
+        )
+        SettingsMenuRow(
+            title = "About App",
+            subtitle = "Version, developer info and disclaimer",
+            onClick = { onNavigate("settings/about") },
+        )
+    }
+}
+
+@Composable
+private fun SettingsMenuRow(title: String, subtitle: String, onClick: () -> Unit) {
+    Card(
+        onClick = onClick,
+        colors = CardDefaults.cardColors(containerColor = CardDark),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Row(
+            modifier = Modifier
+                .padding(16.dp)
+                .fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(title, fontWeight = FontWeight.SemiBold, fontSize = 15.sp, color = TextPrimary)
+                Text(subtitle, fontSize = 12.sp, color = TextSecondary)
+            }
+            Icon(
+                imageVector = androidx.compose.material.icons.Icons.AutoMirrored.Filled.ArrowForward,
+                contentDescription = null,
+                tint = TextSecondary,
+            )
         }
     }
 }
@@ -362,7 +396,6 @@ private fun AiProviderSettingsCard(
     Card(colors = CardDefaults.cardColors(containerColor = CardDark), modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text(config.provider.label, fontWeight = FontWeight.Bold, fontSize = 16.sp)
-            Text("Saved only on this device.", color = TextSecondary, fontSize = 12.sp)
             OutlinedTextField(
                 value = apiKey,
                 onValueChange = { apiKey = it.trim() },

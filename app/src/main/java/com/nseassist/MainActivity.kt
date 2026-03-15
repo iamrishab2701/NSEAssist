@@ -11,8 +11,10 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import com.nseassist.data.model.ScanCategory
+import com.nseassist.ui.screens.AboutAppScreen
 import com.nseassist.ui.screens.AiReportScreen
 import com.nseassist.ui.screens.HomeScreen
+import com.nseassist.ui.screens.ModelConfigScreen
 import com.nseassist.ui.screens.ScanScreen
 import com.nseassist.ui.screens.StockDetailScreen
 import com.nseassist.ui.theme.NSEAssistTheme
@@ -49,6 +51,12 @@ fun AppNavHost(navController: NavHostController) {
         }
         composable("ai-report") {
             AiReportScreen(navController, vm)
+        }
+        composable("settings/model-config") {
+            ModelConfigScreen(navController, vm)
+        }
+        composable("settings/about") {
+            AboutAppScreen(navController)
         }
     }
 }

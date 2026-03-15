@@ -59,3 +59,20 @@ data class AiAnalysisReport(
     val finalVerdict: String = "",
     val disclaimer: String,
 )
+
+/** Result of a single-stock AI deep-dive from the Stock Detail screen. */
+data class SingleStockAiAnalysis(
+    val provider: AiProvider,
+    val model: String,
+    val verdict: String,        // "GO" or "NO-GO"
+    val direction: String,      // "BUY" / "SELL" / "SKIP"
+    val entry: String,          // e.g. "₹847 – ₹852"
+    val target: String,         // e.g. "₹875 (+3.3%)"
+    val stopLoss: String,       // e.g. "₹835 (-1.4%)"
+    val quantity: Int,          // shares affordable within capital
+    val rrRatio: String,        // e.g. "1 : 2.4"
+    val confidence: Int,        // 0–100
+    val reason: String,         // max 2 lines — only technical facts
+    val risk: String,           // 1 specific thing to watch
+    val disclaimer: String,
+)
