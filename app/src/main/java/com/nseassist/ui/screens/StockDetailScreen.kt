@@ -269,7 +269,7 @@ private fun SingleStockAiSheet(
                             },
                             modifier = Modifier.fillMaxWidth(),
                             enabled = canAnalyze,
-                            colors = ButtonDefaults.buttonColors(containerColor = BluePrimary),
+                            colors = ButtonDefaults.buttonColors(containerColor = BluePrimary, contentColor = Color.White),
                         ) {
                             Text("Analyze ${stock.symbol}")
                         }
@@ -497,7 +497,7 @@ private fun StockDetailContent(stock: StockData, newsState: UiState<NewsResult?>
                     stock.score >= 70 -> GreenBull; stock.score >= 50 -> AmberWarn; else -> RedBear
                 }
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                    Text("AI Score", fontWeight = FontWeight.Bold)
+                    Text("AI Score", fontWeight = FontWeight.Bold, color = TextPrimary)
                     Text("${String.format("%.0f", stock.score)}/100", color = scoreColor, fontWeight = FontWeight.Bold, fontSize = 22.sp)
                 }
                 LinearProgressIndicator(

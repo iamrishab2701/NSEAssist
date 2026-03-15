@@ -1,7 +1,6 @@
 package com.nseassist.ui.screens
 
 import androidx.compose.foundation.BorderStroke
-import com.nseassist.BuildConfig
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.rememberScrollState
@@ -141,13 +140,6 @@ fun HomeScreen(navController: NavController, vm: MainViewModel) {
                     )
                 }
             }
-
-            Text(
-                text = "App Version ${BuildConfig.VERSION_NAME}",
-                color = TextSecondary,
-                fontSize = 12.sp,
-                modifier = Modifier.fillMaxWidth(),
-            )
         }
     }
     } // AppGradientBackground
@@ -191,7 +183,7 @@ private fun MarketStatusBanner(status: MarketStatus) {
 private fun MarketOverviewCard(data: MarketOverview) {
     Card(colors = CardDefaults.cardColors(containerColor = CardDark), modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Text("Market Overview", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+            Text("Market Overview", fontWeight = FontWeight.Bold, fontSize = 16.sp, color = TextPrimary)
             HorizontalDivider(color = DividerColor)
             IndexRow("NIFTY 50", data.nifty50, data.nifty50ChangePct, data.niftyAboveVwap)
             IndexRow("BANK NIFTY", data.bankNifty, data.bankNiftyChangePct, data.bankNiftyAboveVwap)
@@ -203,7 +195,7 @@ private fun MarketOverviewCard(data: MarketOverview) {
 private fun MarketSnapshotCard(data: MarketOverview) {
     Card(colors = CardDefaults.cardColors(containerColor = CardDark), modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text("Market Snapshot", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+            Text("Market Snapshot", fontWeight = FontWeight.Bold, fontSize = 16.sp, color = TextPrimary)
             HorizontalDivider(color = DividerColor)
             SnapshotRow("NIFTY Day Change", String.format("%+.1f pts", data.nifty50Change), data.nifty50Change)
             SnapshotRow("BANK NIFTY Change", String.format("%+.1f pts", data.bankNiftyChange), data.bankNiftyChange)
@@ -278,7 +270,7 @@ private fun MoverItem(symbol: String, pct: Double, color: Color, modifier: Modif
 private fun StockSearchCard(query: String, onQueryChange: (String) -> Unit, onSearch: () -> Unit) {
     Card(colors = CardDefaults.cardColors(containerColor = CardDark), modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text("Stock Search", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+            Text("Stock Search", fontWeight = FontWeight.Bold, fontSize = 16.sp, color = TextPrimary)
             Text("Enter an NSE symbol to open the stock details screen.", color = TextSecondary, fontSize = 12.sp)
             OutlinedTextField(
                 value = query,
@@ -299,7 +291,7 @@ private fun StockSearchCard(query: String, onQueryChange: (String) -> Unit, onSe
                 onClick = onSearch,
                 enabled = query.isNotBlank(),
                 modifier = Modifier.fillMaxWidth(),
-                colors = ButtonDefaults.buttonColors(containerColor = BluePrimary),
+                colors = ButtonDefaults.buttonColors(containerColor = BluePrimary, contentColor = Color.White),
             ) {
                 Text("Search Stock", fontWeight = FontWeight.Bold)
             }
@@ -318,7 +310,7 @@ private fun CapitalInputCard(
 ) {
     Card(colors = CardDefaults.cardColors(containerColor = CardDark), modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text("Today's Capital", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+            Text("Today's Capital", fontWeight = FontWeight.Bold, fontSize = 16.sp, color = TextPrimary)
             Text("Only stocks priced ≤ your capital will be scanned.", color = TextSecondary, fontSize = 12.sp)
             OutlinedTextField(
                 value = capital,
@@ -330,7 +322,7 @@ private fun CapitalInputCard(
                 keyboardActions = KeyboardActions(onDone = { onScan() }),
                 modifier = Modifier.fillMaxWidth(),
             )
-            Text("Stock Type", fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+            Text("Stock Type", fontWeight = FontWeight.SemiBold, fontSize = 14.sp, color = TextPrimary)
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 ScanCategory.values().forEach { option ->
                     FilterChip(
@@ -345,7 +337,7 @@ private fun CapitalInputCard(
                 onClick = onScan,
                 enabled = (capital.toDoubleOrNull() ?: 0.0) > 0,
                 modifier = Modifier.fillMaxWidth(),
-                colors = ButtonDefaults.buttonColors(containerColor = BluePrimary),
+                colors = ButtonDefaults.buttonColors(containerColor = BluePrimary, contentColor = Color.White),
             ) {
                 Text("Scan Affordable Stocks", fontWeight = FontWeight.Bold)
             }
@@ -462,7 +454,7 @@ private fun AiProviderSettingsCard(
 
     Card(colors = CardDefaults.cardColors(containerColor = CardDark), modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text(config.provider.label, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+            Text(config.provider.label, fontWeight = FontWeight.Bold, fontSize = 16.sp, color = TextPrimary)
             OutlinedTextField(
                 value = apiKey,
                 onValueChange = { apiKey = it.trim() },
@@ -481,7 +473,7 @@ private fun AiProviderSettingsCard(
             Button(
                 onClick = { onSave(config.provider, apiKey, model) },
                 modifier = Modifier.fillMaxWidth(),
-                colors = ButtonDefaults.buttonColors(containerColor = BluePrimary),
+                colors = ButtonDefaults.buttonColors(containerColor = BluePrimary, contentColor = Color.White),
             ) {
                 Text(if (config.apiKey.isBlank()) "Save ${config.provider.label}" else "Update ${config.provider.label}")
             }

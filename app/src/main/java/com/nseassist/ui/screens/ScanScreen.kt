@@ -97,7 +97,7 @@ fun ScanScreen(
                     Text(state.message, color = RedBear, fontSize = 13.sp)
                     Button(
                         onClick = { vm.scanStocks(capital, category) },
-                        colors = ButtonDefaults.buttonColors(containerColor = BluePrimary),
+                        colors = ButtonDefaults.buttonColors(containerColor = BluePrimary, contentColor = Color.White),
                     ) {
                         Text("Retry", fontWeight = FontWeight.Bold)
                     }
@@ -273,7 +273,7 @@ private fun AnalyzeWithAiCard(
     val isPreparing = exportState is ExportState.Preparing
     Card(colors = CardDefaults.cardColors(containerColor = CardDark), modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Text("AI Analysis", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+            Text("AI Analysis", fontWeight = FontWeight.Bold, fontSize = 16.sp, color = TextPrimary)
             Text("You can either analyze in-app or export the current result set for manual upload.", color = TextSecondary, fontSize = 12.sp)
             if (providers.isEmpty()) {
                 Text("Add at least one provider API key in Settings to enable AI analysis.", color = TextSecondary, fontSize = 12.sp)
@@ -287,7 +287,7 @@ private fun AnalyzeWithAiCard(
                     onClick = onAnalyze,
                     enabled = !isPreparing,
                     modifier = Modifier.fillMaxWidth(),
-                    colors = ButtonDefaults.buttonColors(containerColor = BluePrimary),
+                    colors = ButtonDefaults.buttonColors(containerColor = BluePrimary, contentColor = Color.White),
                 ) {
                     Text("Analyze with AI")
                 }
