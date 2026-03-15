@@ -1,14 +1,19 @@
 package com.nseassist.ui.screens
 
-import androidx.compose.foundation.background
+import com.nseassist.BuildConfig
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CurrencyRupee
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.ShowChart
 import androidx.compose.material.icons.filled.TrendingDown
 import androidx.compose.material.icons.filled.TrendingUp
 import androidx.compose.material3.*
@@ -17,34 +22,81 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavController
+import androidx.compose.runtime.saveable.rememberSaveable
+import com.nseassist.data.model.AiProvider
+import com.nseassist.data.model.AiProviderConfig
+import com.nseassist.data.model.AiSettings
 import com.nseassist.data.model.MarketOverview
 import com.nseassist.data.model.MarketStatus
+import com.nseassist.data.model.ScanCategory
 import com.nseassist.ui.theme.*
 import com.nseassist.ui.viewmodel.MainViewModel
 import com.nseassist.ui.viewmodel.UiState
 
-@OptIn(ExperimentalMaterial3Api::class)
+private enum class HomeTab(val label: String) {
+    Market("Market"),
+    Capital("Capital"),
+    Search("Search"),
+    Settings("Settings"),
+}
+
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
-fun HomeScreen(navController: NavController, vm: MainViewModel = viewModel()) {
+fun HomeScreen(navController: NavController, vm: MainViewModel) {
     val marketState by vm.marketOverview.collectAsState()
+    val aiSettings by vm.aiSettings.collectAsState()
     var capital by remember { mutableStateOf("") }
+    var stockQuery by remember { mutableStateOf("") }
+    var selectedCategory by rememberSaveable { mutableStateOf(ScanCategory.ALL.routeValue) }
+    var selectedTab by rememberSaveable { mutableStateOf(HomeTab.Market.name) }
+    val currentTab = HomeTab.valueOf(selectedTab)
+    val currentCategory = ScanCategory.fromRouteValue(selectedCategory)
 
     Scaffold(
         topBar = {
             TopAppBar(
                 title = { Text("NSE Assist", fontWeight = FontWeight.Bold) },
                 actions = {
-                    IconButton(onClick = { vm.loadMarketOverview() }) {
-                        Icon(Icons.Default.Refresh, contentDescription = "Refresh")
+                    if (currentTab == HomeTab.Market) {
+                        IconButton(onClick = { vm.loadMarketOverview() }) {
+                            Icon(Icons.Default.Refresh, contentDescription = "Refresh")
+                        }
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = CardDark),
             )
+        },
+        bottomBar = {
+            NavigationBar(containerColor = CardDark) {
+                HomeTab.values().forEach { tab ->
+                    NavigationBarItem(
+                        selected = currentTab == tab,
+                        onClick = { selectedTab = tab.name },
+                        icon = {
+                            when (tab) {
+                                HomeTab.Market   -> Icon(Icons.Filled.ShowChart, contentDescription = null)
+                                HomeTab.Capital  -> Icon(Icons.Filled.CurrencyRupee, contentDescription = null)
+                                HomeTab.Search   -> Icon(Icons.Default.Search, contentDescription = null)
+                                HomeTab.Settings -> Icon(Icons.Default.Settings, contentDescription = null)
+                            }
+                        },
+                        label = { Text(tab.label) },
+                        colors = NavigationBarItemDefaults.colors(
+                            selectedIconColor = BluePrimary,
+                            selectedTextColor = TextPrimary,
+                            indicatorColor = SurfaceDark,
+                            unselectedIconColor = TextSecondary,
+                            unselectedTextColor = TextSecondary,
+                        ),
+                    )
+                }
+            }
         },
         containerColor = SurfaceDark,
     ) { padding ->
@@ -56,28 +108,50 @@ fun HomeScreen(navController: NavController, vm: MainViewModel = viewModel()) {
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-
-            // Market Status Banner
-            when (val state = marketState) {
-                is UiState.Loading -> LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                is UiState.Success -> {
-                    MarketStatusBanner(state.data.marketStatus)
-                    MarketOverviewCard(state.data)
-                    TopMoversCard(state.data)
-                }
-                is UiState.Error -> ErrorCard(state.message) { vm.loadMarketOverview() }
+            when (currentTab) {
+                HomeTab.Market -> MarketOverviewTab(marketState, onRetry = vm::loadMarketOverview)
+                HomeTab.Capital -> CapitalInputCard(
+                    capital = capital,
+                    category = currentCategory,
+                    onCapitalChange = { capital = it },
+                    onCategoryChange = { selectedCategory = it.routeValue },
+                    onScan = {
+                        val amt = capital.toDoubleOrNull() ?: 0.0
+                        if (amt > 0) navController.navigate("scan/$amt/${currentCategory.routeValue}")
+                    },
+                )
+                HomeTab.Search -> StockSearchCard(
+                    query = stockQuery,
+                    onQueryChange = { stockQuery = it.uppercase() },
+                    onSearch = {
+                        val symbol = stockQuery.trim()
+                        if (symbol.isNotBlank()) navController.navigate("stock/$symbol")
+                    },
+                )
+                HomeTab.Settings -> AiSettingsTab(aiSettings = aiSettings, onSave = vm::upsertAiProvider)
             }
 
-            // Capital input + Scan button
-            CapitalInputCard(
-                capital = capital,
-                onCapitalChange = { capital = it },
-                onScan = {
-                    val amt = capital.toDoubleOrNull() ?: 0.0
-                    if (amt > 0) navController.navigate("scan/$amt")
-                },
+            Text(
+                text = "App Version ${BuildConfig.VERSION_NAME}",
+                color = TextSecondary,
+                fontSize = 12.sp,
+                modifier = Modifier.fillMaxWidth(),
             )
         }
+    }
+}
+
+@Composable
+private fun MarketOverviewTab(marketState: UiState<MarketOverview>, onRetry: () -> Unit) {
+    when (marketState) {
+        is UiState.Loading -> LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+        is UiState.Success -> {
+            MarketStatusBanner(marketState.data.marketStatus)
+            MarketOverviewCard(marketState.data)
+            MarketSnapshotCard(marketState.data)
+            TopMoversCard(marketState.data)
+        }
+        is UiState.Error -> ErrorCard(marketState.message, onRetry)
     }
 }
 
@@ -106,10 +180,37 @@ private fun MarketOverviewCard(data: MarketOverview) {
     Card(colors = CardDefaults.cardColors(containerColor = CardDark), modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Text("Market Overview", fontWeight = FontWeight.Bold, fontSize = 16.sp)
-            Divider(color = DividerColor)
+            HorizontalDivider(color = DividerColor)
             IndexRow("NIFTY 50", data.nifty50, data.nifty50ChangePct, data.niftyAboveVwap)
             IndexRow("BANK NIFTY", data.bankNifty, data.bankNiftyChangePct, data.bankNiftyAboveVwap)
         }
+    }
+}
+
+@Composable
+private fun MarketSnapshotCard(data: MarketOverview) {
+    Card(colors = CardDefaults.cardColors(containerColor = CardDark), modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text("Market Snapshot", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+            HorizontalDivider(color = DividerColor)
+            SnapshotRow("NIFTY Day Change", String.format("%+.1f pts", data.nifty50Change), data.nifty50Change)
+            SnapshotRow("BANK NIFTY Change", String.format("%+.1f pts", data.bankNiftyChange), data.bankNiftyChange)
+            SnapshotRow("NIFTY VWAP Bias", if (data.niftyAboveVwap) "Above VWAP" else "Below VWAP", if (data.niftyAboveVwap) 1.0 else -1.0)
+            SnapshotRow("BANK VWAP Bias", if (data.bankNiftyAboveVwap) "Above VWAP" else "Below VWAP", if (data.bankNiftyAboveVwap) 1.0 else -1.0)
+        }
+    }
+}
+
+@Composable
+private fun SnapshotRow(label: String, value: String, trend: Double) {
+    val color = if (trend >= 0) GreenBull else RedBear
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(label, color = TextSecondary, fontSize = 13.sp)
+        Text(value, color = color, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
     }
 }
 
@@ -134,7 +235,7 @@ private fun TopMoversCard(data: MarketOverview) {
                 Text("Top Gainers", color = GreenBull, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
                 Text("Top Losers", color = RedBear, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
             }
-            Divider(color = DividerColor)
+            HorizontalDivider(color = DividerColor)
             val maxRows = maxOf(data.topGainers.size, data.topLosers.size)
             repeat(maxRows) { i ->
                 Row {
@@ -162,7 +263,47 @@ private fun MoverItem(symbol: String, pct: Double, color: Color, modifier: Modif
 }
 
 @Composable
-private fun CapitalInputCard(capital: String, onCapitalChange: (String) -> Unit, onScan: () -> Unit) {
+private fun StockSearchCard(query: String, onQueryChange: (String) -> Unit, onSearch: () -> Unit) {
+    Card(colors = CardDefaults.cardColors(containerColor = CardDark), modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text("Stock Search", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+            Text("Enter an NSE symbol to open the stock details screen.", color = TextSecondary, fontSize = 12.sp)
+            OutlinedTextField(
+                value = query,
+                onValueChange = onQueryChange,
+                label = { Text("Symbol") },
+                leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(
+                    capitalization = KeyboardCapitalization.Characters,
+                    autoCorrect = false,
+                    imeAction = ImeAction.Search,
+                    keyboardType = KeyboardType.Text,
+                ),
+                keyboardActions = KeyboardActions(onSearch = { onSearch() }),
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Button(
+                onClick = onSearch,
+                enabled = query.isNotBlank(),
+                modifier = Modifier.fillMaxWidth(),
+                colors = ButtonDefaults.buttonColors(containerColor = BluePrimary),
+            ) {
+                Text("Search Stock", fontWeight = FontWeight.Bold)
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun CapitalInputCard(
+    capital: String,
+    category: ScanCategory,
+    onCapitalChange: (String) -> Unit,
+    onCategoryChange: (ScanCategory) -> Unit,
+    onScan: () -> Unit,
+) {
     Card(colors = CardDefaults.cardColors(containerColor = CardDark), modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text("Today's Capital", fontWeight = FontWeight.Bold, fontSize = 16.sp)
@@ -177,6 +318,17 @@ private fun CapitalInputCard(capital: String, onCapitalChange: (String) -> Unit,
                 keyboardActions = KeyboardActions(onDone = { onScan() }),
                 modifier = Modifier.fillMaxWidth(),
             )
+            Text("Stock Type", fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                ScanCategory.values().forEach { option ->
+                    FilterChip(
+                        selected = category == option,
+                        onClick = { onCategoryChange(option) },
+                        label = { Text(option.label) },
+                    )
+                }
+            }
+            Text(category.helperText, color = TextSecondary, fontSize = 12.sp)
             Button(
                 onClick = onScan,
                 enabled = (capital.toDoubleOrNull() ?: 0.0) > 0,
@@ -184,6 +336,54 @@ private fun CapitalInputCard(capital: String, onCapitalChange: (String) -> Unit,
                 colors = ButtonDefaults.buttonColors(containerColor = BluePrimary),
             ) {
                 Text("Scan Affordable Stocks", fontWeight = FontWeight.Bold)
+            }
+        }
+    }
+}
+
+@Composable
+private fun AiSettingsTab(aiSettings: AiSettings, onSave: (AiProvider, String, String) -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+        Text("Bring your own AI key", color = TextSecondary, fontSize = 12.sp)
+        aiSettings.providers.forEach { config ->
+            AiProviderSettingsCard(config = config, onSave = onSave)
+        }
+    }
+}
+
+@Composable
+private fun AiProviderSettingsCard(
+    config: AiProviderConfig,
+    onSave: (AiProvider, String, String) -> Unit,
+) {
+    var apiKey by remember(config.provider, config.apiKey) { mutableStateOf(config.apiKey) }
+    var model by remember(config.provider, config.model) { mutableStateOf(config.model) }
+
+    Card(colors = CardDefaults.cardColors(containerColor = CardDark), modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text(config.provider.label, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+            Text("Saved only on this device.", color = TextSecondary, fontSize = 12.sp)
+            OutlinedTextField(
+                value = apiKey,
+                onValueChange = { apiKey = it.trim() },
+                label = { Text("API Key") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            OutlinedTextField(
+                value = model,
+                onValueChange = { model = it },
+                label = { Text("Model") },
+                supportingText = { Text("Default: ${config.provider.defaultModel}") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Button(
+                onClick = { onSave(config.provider, apiKey, model) },
+                modifier = Modifier.fillMaxWidth(),
+                colors = ButtonDefaults.buttonColors(containerColor = BluePrimary),
+            ) {
+                Text(if (config.apiKey.isBlank()) "Save ${config.provider.label}" else "Update ${config.provider.label}")
             }
         }
     }

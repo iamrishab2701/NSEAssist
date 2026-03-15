@@ -140,6 +140,143 @@ class TechnicalIndicators {
         return PricePrediction(high, low, direction, confidence)
     }
 
+    // ── Bollinger Bands (20-period, 2 std dev) ───────────────────────────────────
+    fun bollingerBands(closes: List<Double>, period: Int = 20, multiplier: Double = 2.0): BollingerBands {
+        if (closes.size < period) {
+            val ltp = closes.lastOrNull() ?: 0.0
+            return BollingerBands(ltp, ltp, ltp)
+        }
+        val window = closes.takeLast(period)
+        val mean = window.average()
+        val variance = window.sumOf { (it - mean) * (it - mean) } / period
+        val stdDev = sqrt(variance)
+        return BollingerBands(
+            upper = mean + multiplier * stdDev,
+            middle = mean,
+            lower = mean - multiplier * stdDev,
+        )
+    }
+
+    // ── ADX (Average Directional Index, 14-period) ───────────────────────────────
+    fun adx(highs: List<Double>, lows: List<Double>, closes: List<Double>, period: Int = 14): AdxResult {
+        val size = minOf(highs.size, lows.size, closes.size)
+        if (size < period + 2) return AdxResult(0.0, 0.0, 0.0)
+
+        val trList = mutableListOf<Double>()
+        val dmPlus = mutableListOf<Double>()
+        val dmMinus = mutableListOf<Double>()
+
+        for (i in 1 until size) {
+            val tr = maxOf(
+                highs[i] - lows[i],
+                abs(highs[i] - closes[i - 1]),
+                abs(lows[i] - closes[i - 1])
+            )
+            trList += tr
+            val upMove = highs[i] - highs[i - 1]
+            val downMove = lows[i - 1] - lows[i]
+            dmPlus += if (upMove > downMove && upMove > 0) upMove else 0.0
+            dmMinus += if (downMove > upMove && downMove > 0) downMove else 0.0
+        }
+
+        fun smoothed(list: List<Double>): List<Double> {
+            if (list.size < period) return emptyList()
+            val result = mutableListOf(list.take(period).sum())
+            for (i in period until list.size) {
+                result += result.last() - result.last() / period + list[i]
+            }
+            return result
+        }
+
+        val smoothTr = smoothed(trList)
+        val smoothPlus = smoothed(dmPlus)
+        val smoothMinus = smoothed(dmMinus)
+        if (smoothTr.isEmpty()) return AdxResult(0.0, 0.0, 0.0)
+
+        val diPlus = smoothPlus.zip(smoothTr).map { (p, t) -> if (t != 0.0) 100.0 * p / t else 0.0 }
+        val diMinus = smoothMinus.zip(smoothTr).map { (m, t) -> if (t != 0.0) 100.0 * m / t else 0.0 }
+        val dx = diPlus.zip(diMinus).map { (p, m) ->
+            val sum = p + m
+            if (sum != 0.0) 100.0 * abs(p - m) / sum else 0.0
+        }
+
+        val adxVal = if (dx.size >= period) dx.takeLast(period).average() else dx.average()
+        return AdxResult(
+            adx = adxVal,
+            diPlus = diPlus.lastOrNull() ?: 0.0,
+            diMinus = diMinus.lastOrNull() ?: 0.0,
+        )
+    }
+
+    // ── Candlestick Pattern Detection ────────────────────────────────────────────
+    fun detectCandlePattern(
+        opens: List<Double>,
+        highs: List<Double>,
+        lows: List<Double>,
+        closes: List<Double>,
+    ): CandlePattern {
+        val size = minOf(opens.size, highs.size, lows.size, closes.size)
+        if (size < 2) return CandlePattern("NONE", "No pattern", CandleSignal.NEUTRAL)
+
+        val o = opens[size - 1]; val h = highs[size - 1]
+        val l = lows[size - 1]; val c = closes[size - 1]
+        val po = opens[size - 2]; val ph = highs[size - 2]
+        val pl = lows[size - 2]; val pc = closes[size - 2]
+
+        val body = abs(c - o)
+        val range = h - l
+        val upperShadow = h - maxOf(o, c)
+        val lowerShadow = minOf(o, c) - l
+        val prevBody = abs(pc - po)
+        val isBullish = c > o
+        val isPrevBullish = pc > po
+
+        return when {
+            // Doji — very small body
+            range > 0 && body / range < 0.1 ->
+                CandlePattern("DOJI", "Doji — indecision, potential reversal", CandleSignal.NEUTRAL)
+
+            // Hammer — small body at top, long lower shadow, bullish reversal
+            lowerShadow >= body * 2 && upperShadow <= body * 0.3 && !isBullish.not() ->
+                CandlePattern("HAMMER", "Hammer — bullish reversal signal", CandleSignal.BULLISH)
+
+            // Shooting Star — small body at bottom, long upper shadow, bearish reversal
+            upperShadow >= body * 2 && lowerShadow <= body * 0.3 && isBullish ->
+                CandlePattern("SHOOTING_STAR", "Shooting Star — bearish reversal signal", CandleSignal.BEARISH)
+
+            // Bullish Engulfing
+            !isBullish.not() && !isPrevBullish && body > prevBody && o <= pc && c >= po ->
+                CandlePattern("BULLISH_ENGULFING", "Bullish Engulfing — strong reversal up", CandleSignal.BULLISH)
+
+            // Bearish Engulfing
+            !isBullish && isPrevBullish && body > prevBody && o >= pc && c <= po ->
+                CandlePattern("BEARISH_ENGULFING", "Bearish Engulfing — strong reversal down", CandleSignal.BEARISH)
+
+            // Morning Star (3-candle) requires size >= 3
+            size >= 3 && closes[size - 3] < opens[size - 3] && body < prevBody * 0.5 && isBullish ->
+                CandlePattern("MORNING_STAR", "Morning Star — bullish reversal", CandleSignal.BULLISH)
+
+            // Evening Star
+            size >= 3 && closes[size - 3] > opens[size - 3] && body < prevBody * 0.5 && !isBullish ->
+                CandlePattern("EVENING_STAR", "Evening Star — bearish reversal", CandleSignal.BEARISH)
+
+            else -> CandlePattern("NONE", "No clear pattern", CandleSignal.NEUTRAL)
+        }
+    }
+
+    data class BollingerBands(val upper: Double, val middle: Double, val lower: Double)
+
+    data class AdxResult(val adx: Double, val diPlus: Double, val diMinus: Double) {
+        val isTrending: Boolean get() = adx >= 25.0
+        val isStrongTrend: Boolean get() = adx >= 40.0
+        val isBullishTrend: Boolean get() = isTrending && diPlus > diMinus
+        val isBearishTrend: Boolean get() = isTrending && diMinus > diPlus
+    }
+
+    enum class CandleSignal { BULLISH, BEARISH, NEUTRAL }
+
+    data class CandlePattern(val type: String, val label: String, val signal: CandleSignal)
+
     data class PricePrediction(
         val high: Double,
         val low: Double,

@@ -4,12 +4,22 @@ import com.nseassist.data.model.StockData
 import kotlin.math.min
 
 /**
- * Port of `recommendation_score()` from nse_live_prices.py
- * Score: 0–100. Only recommend trades with score >= 70.
+ * Score: 0–100. Combines technical indicators, candlestick patterns,
+ * Bollinger Bands, ADX trend strength, and market condition awareness.
  */
 class StockScorer {
 
-    fun score(stock: StockData): Double {
+    enum class MarketCondition { BULLISH, BEARISH, CHOPPY }
+
+    fun detectMarketCondition(niftyChangePct: Double, niftyAboveVwap: Boolean): MarketCondition {
+        return when {
+            niftyChangePct > 0.5 && niftyAboveVwap -> MarketCondition.BULLISH
+            niftyChangePct < -0.5 && !niftyAboveVwap -> MarketCondition.BEARISH
+            else -> MarketCondition.CHOPPY
+        }
+    }
+
+    fun score(stock: StockData, marketCondition: MarketCondition = MarketCondition.CHOPPY): Double {
         var score = 50.0  // neutral baseline
 
         // VWAP position (+15 / -15)
@@ -50,6 +60,56 @@ class StockScorer {
 
         // Trend signal boost (from TrendDetector)
         score += stock.scoreBoostFromTrendSignal()
+
+        // Bollinger Band position
+        if (stock.bollingerUpper > 0.0 && stock.bollingerLower > 0.0) {
+            when {
+                stock.ltp > stock.bollingerUpper -> score -= 8.0   // overbought
+                stock.ltp < stock.bollingerLower -> score -= 5.0   // oversold — could reverse
+                stock.ltp > stock.bollingerMiddle -> score += 5.0  // above mid = mild bullish
+                else -> score -= 2.0
+            }
+        }
+
+        // ADX trend strength
+        if (stock.adx > 0.0) {
+            when {
+                stock.adx >= 40.0 -> {
+                    // Strong trend — reward alignment
+                    if (stock.adxDiPlus > stock.adxDiMinus) score += 8.0
+                    else score -= 5.0
+                }
+                stock.adx >= 25.0 -> {
+                    if (stock.adxDiPlus > stock.adxDiMinus) score += 5.0
+                    else score -= 3.0
+                }
+                else -> score -= 3.0  // choppy/weak trend
+            }
+        }
+
+        // Candlestick pattern signal
+        score += when (stock.candleSignal) {
+            "BULLISH" -> when (stock.candlePattern) {
+                "BULLISH_ENGULFING" -> 10.0
+                "MORNING_STAR" -> 8.0
+                "HAMMER" -> 6.0
+                else -> 4.0
+            }
+            "BEARISH" -> when (stock.candlePattern) {
+                "BEARISH_ENGULFING" -> -10.0
+                "EVENING_STAR" -> -8.0
+                "SHOOTING_STAR" -> -6.0
+                else -> -4.0
+            }
+            else -> 0.0
+        }
+
+        // Market condition awareness
+        score += when (marketCondition) {
+            MarketCondition.BULLISH -> if (stock.aboveVwap && stock.changePct > 0) 6.0 else 0.0
+            MarketCondition.BEARISH -> if (!stock.aboveVwap && stock.changePct < 0) -6.0 else -3.0
+            MarketCondition.CHOPPY -> -3.0   // penalize all setups slightly in choppy market
+        }
 
         // Prediction confidence bonus
         if (stock.predictionConfidence >= 75) score += 5.0

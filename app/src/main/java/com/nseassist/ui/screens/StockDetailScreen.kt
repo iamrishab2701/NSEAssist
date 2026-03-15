@@ -6,6 +6,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Cancel
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -14,8 +16,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavController
+import com.nseassist.data.model.NewsSentiment
+import com.nseassist.data.model.NewsResult
 import com.nseassist.data.model.StockData
 import com.nseassist.ui.theme.*
 import com.nseassist.ui.viewmodel.MainViewModel
@@ -23,7 +26,7 @@ import com.nseassist.ui.viewmodel.UiState
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun StockDetailScreen(navController: NavController, symbol: String, vm: MainViewModel = viewModel()) {
+fun StockDetailScreen(navController: NavController, symbol: String, vm: MainViewModel) {
     val detailState by vm.stockDetail.collectAsState()
 
     LaunchedEffect(symbol) { vm.loadStockDetail(symbol) }
@@ -72,12 +75,31 @@ private fun StockDetailContent(stock: StockData, modifier: Modifier) {
     ) {
         // Price header
         Card(colors = CardDefaults.cardColors(containerColor = CardDark)) {
-            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text("₹${String.format("%,.2f", stock.ltp)}", fontSize = 28.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
-                    Text(String.format("%+.2f%%", stock.changePct), fontSize = 20.sp, fontWeight = FontWeight.Bold, color = priceColor)
+            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (stock.name.isNotBlank() && stock.name != stock.symbol) {
+                    Text(stock.name, color = TextSecondary, fontSize = 12.sp)
                 }
-                Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.Bottom,
+                ) {
+                    Text(
+                        "₹${String.format("%,.2f", stock.ltp)}",
+                        fontSize = 30.sp, fontWeight = FontWeight.Bold, color = TextPrimary,
+                    )
+                    Column(horizontalAlignment = Alignment.End) {
+                        Text(
+                            String.format("%+.2f%%", stock.changePct),
+                            fontSize = 18.sp, fontWeight = FontWeight.Bold, color = priceColor,
+                        )
+                        Text(
+                            String.format("%+.2f", stock.change),
+                            color = priceColor, fontSize = 12.sp,
+                        )
+                    }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     InfoChip("H ₹${fmt(stock.dayHigh)}", GreenBull)
                     InfoChip("L ₹${fmt(stock.dayLow)}", RedBear)
                     InfoChip(if (stock.aboveVwap) "▲ VWAP" else "▼ VWAP", if (stock.aboveVwap) GreenBull else RedBear)
@@ -96,7 +118,17 @@ private fun StockDetailContent(stock: StockData, modifier: Modifier) {
                     Text("AI Score", fontWeight = FontWeight.Bold)
                     Text("${String.format("%.0f", stock.score)}/100", color = scoreColor, fontWeight = FontWeight.Bold, fontSize = 22.sp)
                 }
+                LinearProgressIndicator(
+                    progress = { (stock.score / 100.0).toFloat() },
+                    modifier = Modifier.fillMaxWidth(),
+                    color = scoreColor,
+                    trackColor = scoreColor.copy(alpha = 0.15f),
+                )
                 Text("${stock.optionAction}  ·  ${stock.trendSignalType}", color = scoreColor, fontSize = 13.sp)
+                if (stock.newsImpactScore != 0) {
+                    val newsText = if (stock.newsImpactScore > 0) "News support +${stock.newsImpactScore}" else "News drag ${stock.newsImpactScore}"
+                    Text(newsText, color = if (stock.newsImpactScore > 0) GreenBull else RedBear, fontSize = 12.sp)
+                }
                 if (stock.trendSignalLabel.isNotBlank()) {
                     Text(stock.trendSignalLabel, color = TextSecondary, fontSize = 12.sp)
                 }
@@ -116,6 +148,44 @@ private fun StockDetailContent(stock: StockData, modifier: Modifier) {
             IndicatorRow("Volume", if (stock.volumeSpike) "🔥 ${fmtVol(stock.volume)}" else fmtVol(stock.volume),
                 if (stock.volumeSpike) AmberWarn else TextSecondary,
                 if (stock.volumeSpike) "Volume spike!" else "Normal")
+            if (stock.bollingerUpper > 0.0) {
+                val bbPos = when {
+                    stock.ltp > stock.bollingerUpper -> "Above upper — overbought"
+                    stock.ltp < stock.bollingerLower -> "Below lower — oversold"
+                    stock.ltp > stock.bollingerMiddle -> "Above midline"
+                    else -> "Below midline"
+                }
+                val bbColor = when {
+                    stock.ltp > stock.bollingerUpper -> RedBear
+                    stock.ltp < stock.bollingerLower -> AmberWarn
+                    else -> GreenBull
+                }
+                IndicatorRow("Bollinger", "U:₹${fmt(stock.bollingerUpper)}", bbColor, bbPos)
+            }
+            if (stock.adx > 0.0) {
+                val adxLabel = when {
+                    stock.adx >= 40.0 -> "Strong trend"
+                    stock.adx >= 25.0 -> "Trending"
+                    else -> "Weak/Choppy"
+                }
+                val adxColor = if (stock.adxDiPlus > stock.adxDiMinus) GreenBull else RedBear
+                IndicatorRow("ADX", String.format("%.1f", stock.adx), adxColor, adxLabel)
+            }
+        }
+
+        // Candlestick Pattern
+        if (stock.candlePattern != "NONE") {
+            SectionCard("Candlestick Pattern") {
+                val color = when (stock.candleSignal) {
+                    "BULLISH" -> GreenBull
+                    "BEARISH" -> RedBear
+                    else -> AmberWarn
+                }
+                LabelRow(stock.candlePattern.replace("_", " "), stock.candleSignal, color)
+                if (stock.candlePatternLabel.isNotBlank()) {
+                    Text(stock.candlePatternLabel, color = TextSecondary, fontSize = 12.sp)
+                }
+            }
         }
 
         // Trend History
@@ -139,6 +209,9 @@ private fun StockDetailContent(stock: StockData, modifier: Modifier) {
             IndicatorRow("Resistance", "₹${fmt(stock.resistance)}", RedBear, "20-day high")
         }
 
+        // News — 24h stock + sector context
+        NewsCard(stock.news)
+
         // Signal Checklist
         SectionCard("Signal Checklist") {
             CheckRow("Price above VWAP", stock.aboveVwap)
@@ -148,6 +221,16 @@ private fun StockDetailContent(stock: StockData, modifier: Modifier) {
             CheckRow("EMA 20 > EMA 50", stock.ema20 > stock.ema50)
             CheckRow("MACD bullish", stock.macdLine > stock.macdSignal)
             CheckRow("6-Month bullish structure", stock.trend6Month == "Bullish")
+            if (stock.bollingerUpper > 0.0) {
+                CheckRow("Within Bollinger Bands", stock.ltp <= stock.bollingerUpper && stock.ltp >= stock.bollingerLower)
+            }
+            if (stock.adx > 0.0) {
+                CheckRow("ADX trending (>=25)", stock.adx >= 25.0)
+                CheckRow("DI+ above DI- (bullish trend)", stock.adxDiPlus > stock.adxDiMinus)
+            }
+            if (stock.candlePattern != "NONE") {
+                CheckRow("Bullish candle pattern", stock.candleSignal == "BULLISH")
+            }
         }
 
         Spacer(Modifier.height(32.dp))
@@ -162,8 +245,8 @@ private fun StockDetailContent(stock: StockData, modifier: Modifier) {
 private fun SectionCard(title: String, content: @Composable ColumnScope.() -> Unit) {
     Card(colors = CardDefaults.cardColors(containerColor = CardDark), modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text(title, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-            Divider(color = DividerColor, thickness = 0.5.dp)
+            Text(title, fontWeight = FontWeight.SemiBold, fontSize = 13.sp, color = TextSecondary, letterSpacing = 0.5.sp)
+            HorizontalDivider(color = DividerColor, thickness = 0.5.dp)
             content()
         }
     }
@@ -191,15 +274,66 @@ private fun LabelRow(label: String, value: String, color: Color) {
 @Composable
 private fun CheckRow(label: String, passes: Boolean) {
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text(if (passes) "✅" else "❌", fontSize = 13.sp)
+        Icon(
+            imageVector = if (passes) Icons.Filled.CheckCircle else Icons.Filled.Cancel,
+            contentDescription = null,
+            tint = if (passes) GreenBull else RedBear.copy(alpha = 0.55f),
+            modifier = Modifier.size(15.dp),
+        )
         Text(label, color = if (passes) TextPrimary else TextSecondary, fontSize = 12.sp)
     }
 }
 
 @Composable
 private fun InfoChip(text: String, color: Color) {
-    Surface(shape = RoundedCornerShape(4.dp), color = color.copy(alpha = 0.15f)) {
-        Text(text, color = color, fontSize = 11.sp, modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp))
+    Surface(shape = RoundedCornerShape(6.dp), color = color.copy(alpha = 0.13f)) {
+        Text(text, color = color, fontSize = 11.sp, fontWeight = FontWeight.Medium,
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp))
+    }
+}
+
+@Composable
+private fun NewsCard(news: NewsResult?) {
+    SectionCard("📰 24h News Context") {
+        if (news == null) {
+            Text("No recent news found", color = TextSecondary, fontSize = 12.sp)
+        } else {
+            val (icon, label, color) = when (news.sentiment) {
+                NewsSentiment.POSITIVE -> Triple("✅", "Positive",  GreenBull)
+                NewsSentiment.NEGATIVE -> Triple("⚠️", "Negative",  RedBear)
+                NewsSentiment.NEUTRAL  -> Triple("➖", "Neutral",   AmberWarn)
+                NewsSentiment.NONE     -> Triple("📰", "No signal", TextSecondary)
+            }
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("$icon $label", color = color, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                if (news.ageText.isNotBlank())
+                    Text(news.ageText, color = TextSecondary, fontSize = 11.sp)
+            }
+            Spacer(Modifier.height(6.dp))
+            Text(news.headline, color = TextPrimary, fontSize = 12.sp, lineHeight = 18.sp)
+            Spacer(Modifier.height(4.dp))
+            LabelRow("Stock News", news.stockSentiment.name, newsColor(news.stockSentiment))
+            LabelRow("Sector News", news.sectorSentiment.name, newsColor(news.sectorSentiment))
+            LabelRow("Articles", "${news.stockArticleCount} stock · ${news.sectorArticleCount} sector", TextSecondary)
+            LabelRow("Sources", news.sourceCount.toString(), TextSecondary)
+            if (news.sector.isNotBlank()) {
+                LabelRow("Sector", news.sector, TextSecondary)
+            }
+            Spacer(Modifier.height(4.dp))
+            news.articles.forEach { article ->
+                Text("• ${article.headline}", color = TextPrimary, fontSize = 12.sp, lineHeight = 18.sp)
+                Text("  ${article.source} · ${article.ageText}", color = TextSecondary, fontSize = 10.sp)
+            }
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "Aggregated from multiple business news sources over the last 24 hours. Used as a supporting intraday context signal.",
+                color = TextSecondary, fontSize = 10.sp,
+            )
+        }
     }
 }
 
@@ -224,3 +358,10 @@ private fun trendColor(t: String) = when (t) {
 }
 
 private fun predColor(d: String) = when (d) { "Up" -> GreenBull; "Down" -> RedBear; else -> AmberWarn }
+
+private fun newsColor(sentiment: NewsSentiment) = when (sentiment) {
+    NewsSentiment.POSITIVE -> GreenBull
+    NewsSentiment.NEGATIVE -> RedBear
+    NewsSentiment.NEUTRAL -> AmberWarn
+    NewsSentiment.NONE -> TextSecondary
+}

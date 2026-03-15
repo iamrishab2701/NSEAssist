@@ -1,0 +1,23 @@
+# Cloudflare Worker config for NSEAssist Yahoo Finance Proxy
+# Docs: https://developers.cloudflare.com/workers/configuration/
+
+name               = "nseassist-proxy"
+main               = "worker.js"
+compatibility_date = "2024-09-23"
+
+# Free workers.dev subdomain — no custom domain needed.
+# After "wrangler deploy" your Worker will be live at:
+#   https://nseassist-proxy.<your-cloudflare-subdomain>.workers.dev
+
+# ─── Secrets (set via CLI, never stored in this file) ───────────────────────
+#
+# TWELVE_DATA_KEY  — Twelve Data API key (fallback data source for quotes/history)
+#
+# One-time setup:
+#   1. Sign up free at https://twelvedata.com → copy your API key
+#   2. Run:  wrangler secret put TWELVE_DATA_KEY
+#            (paste key when prompted — it is encrypted and stored in Cloudflare)
+#   3. Run:  wrangler deploy   (secrets take effect after redeploy)
+#
+# Free tier: 800 req/day, 8 req/min — well within normal app usage.
+# The Worker only calls Twelve Data when Yahoo Finance is unavailable.

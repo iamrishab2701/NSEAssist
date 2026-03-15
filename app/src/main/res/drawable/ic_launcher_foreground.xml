@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Chart line icon — N for NSE -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#FF2196F3"
+        android:strokeWidth="5"
+        android:pathData="M24,72 L40,44 L56,60 L72,32 L84,48"/>
+    <!-- Green dot at peak -->
+    <path
+        android:fillColor="#FF00C853"
+        android:pathData="M72,32 m-5,0 a5,5 0 1,0 10,0 a5,5 0 1,0 -10,0"/>
+</vector>
