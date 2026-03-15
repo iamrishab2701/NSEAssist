@@ -516,6 +516,159 @@ function screenerBody(offset, size, maxPrice) {
   });
 }
 
+// ── News: RSS sources ─────────────────────────────────────────────────────────
+
+const RSS_SOURCES = [
+  { name: "Moneycontrol",       url: "https://www.moneycontrol.com/rss/buzzingstocks.xml" },
+  { name: "Economic Times",     url: "https://economictimes.indiatimes.com/markets/stocks/rssfeeds/2146842.cms" },
+  { name: "ET Markets",         url: "https://economictimes.indiatimes.com/markets/rssfeeds/1977021501.cms" },
+  { name: "Business Standard",  url: "https://www.business-standard.com/rss/markets-106.rss" },
+  { name: "LiveMint",           url: "https://www.livemint.com/rss/markets" },
+  { name: "Financial Express",  url: "https://www.financialexpress.com/market/feed/" },
+  { name: "Reuters India",      url: "https://feeds.reuters.com/reuters/INbusinessNews" },
+  { name: "Business Today",     url: "https://www.businesstoday.in/rss/topic/markets" },
+  { name: "The Hindu Business", url: "https://www.thehindu.com/business/?service=rss" },
+  { name: "Hindu BusinessLine", url: "https://www.thehindubusinessline.com/companies/?service=rss" },
+  { name: "NDTV Profit",        url: "https://www.ndtvprofit.com/rss" },
+  { name: "CNBC TV18",          url: "https://www.cnbctv18.com/rss" },
+];
+
+const NEWS_UA   = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
+const ITEM_RE   = /<item[^>]*>([\s\S]*?)<\/item>/gi;
+const TITLE_RE  = /<title[^>]*>([\s\S]*?)<\/title>/i;
+const DATE_RE   = /<pubDate[^>]*>([\s\S]*?)<\/pubDate>/i;
+const POS_WORDS = ["surge","rally","gain","gains","rise","rises","up","bullish","buy","breakout","profit","growth","strong","upgrade","beat","outperform","record","high","positive","boost"];
+const NEG_WORDS = ["fall","falls","drop","drops","crash","decline","declines","down","bearish","sell","breakdown","loss","losses","weak","downgrade","miss","underperform","low","slump","concern","risk"];
+const MAX_NEWS_AGE_MS = 24 * 60 * 60 * 1000;
+
+// ── News helpers ──────────────────────────────────────────────────────────────
+
+function decodeEntities(text) {
+  return text
+    .replace(/&nbsp;/g, " ").replace(/&ldquo;/g, '"').replace(/&rdquo;/g, '"')
+    .replace(/&lsquo;/g, "'").replace(/&rsquo;/g, "'").replace(/&mdash;/g, "—")
+    .replace(/&ndash;/g, "–").replace(/&hellip;/g, "…").replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&apos;/g, "'")
+    .replace(/&#(\d+);/g,   (_, n) => String.fromCharCode(parseInt(n, 10)))
+    .replace(/&#x([0-9a-f]+);/gi, (_, h) => String.fromCharCode(parseInt(h, 16)))
+    .replace(/<[^>]+>/g, "") // strip any residual HTML tags in title
+    .trim();
+}
+
+function classifyNewsSentiment(headline) {
+  const h = headline.toLowerCase();
+  const pos = POS_WORDS.filter(w => h.includes(w)).length;
+  const neg = NEG_WORDS.filter(w => h.includes(w)).length;
+  if (pos > neg) return "POSITIVE";
+  if (neg > pos) return "NEGATIVE";
+  if (pos > 0 || neg > 0) return "NEUTRAL";
+  return "NONE";
+}
+
+function isNewsRelevant(headline, terms) {
+  const h = headline.toLowerCase();
+  return terms.some(t => t.length >= 2 && h.includes(t.toLowerCase()));
+}
+
+function parseRssDate(str) {
+  if (!str) return Date.now();
+  const t = Date.parse(str.trim()); // JS Date.parse handles RFC 822, ISO 8601, +0530, GMT etc.
+  return t > 0 ? t : Date.now();
+}
+
+async function fetchCachedRss(url) {
+  try {
+    // cf.cacheEverything + cacheTtl caches the response at Cloudflare's edge for 15 min.
+    // Subsequent requests from any device hit cache — no repeated RSS fetches.
+    const resp = await fetch(url, {
+      headers: { "User-Agent": NEWS_UA, "Accept": "application/rss+xml, application/xml, text/xml, */*" },
+      cf: { cacheEverything: true, cacheTtl: 900 },
+    });
+    if (!resp.ok) { console.log(`RSS ${resp.status} for ${url}`); return null; }
+    return await resp.text();
+  } catch (e) {
+    console.log(`RSS fetch error for ${url}: ${e.message}`);
+    return null;
+  }
+}
+
+function parseRssItems(xml, sourceName) {
+  const items = [];
+  ITEM_RE.lastIndex = 0;
+  let m;
+  while ((m = ITEM_RE.exec(xml)) !== null) {
+    const block    = m[1];
+    const titleM = TITLE_RE.exec(block);
+    if (!titleM) continue;
+    // Unwrap CDATA markers if present, then clean
+    let rawTitle = titleM[1].trim();
+    if (rawTitle.startsWith("<![CDATA[")) rawTitle = rawTitle.slice(9);
+    if (rawTitle.endsWith("]]>"))        rawTitle = rawTitle.slice(0, -3);
+    const headline = decodeEntities(rawTitle.trim());
+    if (!headline) continue;
+    const dateM    = DATE_RE.exec(block);
+    items.push({
+      headline,
+      source:      sourceName,
+      publishedAt: parseRssDate(dateM?.[1] ?? ""),
+      sentiment:   classifyNewsSentiment(headline),
+    });
+  }
+  return items;
+}
+
+/**
+ * GET /news?stock=SBIN&company=State+Bank+of+India&aliases=SBI
+ *
+ * Fetches all 12 RSS sources in parallel (each cached 15 min at Cloudflare edge),
+ * filters for stock relevance, returns JSON array of up to 10 articles.
+ */
+async function handleNews(searchParams) {
+  const stock   = (searchParams.get("stock")   ?? "").trim().toUpperCase();
+  const company = (searchParams.get("company") ?? "").trim();
+  const aliases = (searchParams.get("aliases") ?? "").split(",").map(s => s.trim()).filter(Boolean);
+
+  if (!stock) return jsonError("stock parameter required", 400);
+
+  const terms = [...new Set([stock, company, ...aliases].filter(Boolean))];
+
+  // Fetch all RSS sources in parallel — each is independently cached for 15 min
+  const results = await Promise.all(
+    RSS_SOURCES.map(async ({ name, url }) => {
+      const xml = await fetchCachedRss(url);
+      return xml ? parseRssItems(xml, name) : [];
+    })
+  );
+
+  const allArticles = results.flat();
+  const now         = Date.now();
+
+  // Filter: stock-relevant + within last 24 hours
+  const relevant = allArticles.filter(a =>
+    (now - a.publishedAt) <= MAX_NEWS_AGE_MS && isNewsRelevant(a.headline, terms)
+  );
+
+  // Deduplicate by first 60 chars of headline, sort newest first, cap at 10
+  const seen   = new Set();
+  const unique = relevant
+    .sort((a, b) => b.publishedAt - a.publishedAt)
+    .filter(a => {
+      const key = a.headline.toLowerCase().slice(0, 60);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .slice(0, 10);
+
+  const sourceCount = new Set(unique.map(a => a.source)).size;
+  console.log(`News [${stock}] matched=${unique.length} total=${allArticles.length} sources=${sourceCount}`);
+
+  return new Response(
+    JSON.stringify({ articles: unique, stockCount: unique.length, totalFetched: allArticles.length, sourceCount }),
+    { headers: corsHeaders() },
+  );
+}
+
 // ── Main entry point ──────────────────────────────────────────────────────────
 
 export default {
@@ -536,6 +689,7 @@ export default {
       if (pathname === "/quotes")   return handleQuotes(searchParams, apiKey);
       if (pathname === "/history")  return handleHistory(searchParams, apiKey);
       if (pathname === "/profile")  return handleProfile(searchParams);
+      if (pathname === "/news")     return handleNews(searchParams);
       return jsonError(`Unknown endpoint: ${pathname}`, 404);
     } catch (e) {
       return jsonError(e.message, 500);
