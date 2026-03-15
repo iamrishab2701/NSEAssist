@@ -2,10 +2,17 @@ plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
+    alias(libs.plugins.google.services)
+    alias(libs.plugins.firebase.appdistribution)
 }
 
 val appVersionCode = (project.findProperty("appVersionCode") as String?)?.toIntOrNull() ?: 1
 val appVersionName = (project.findProperty("appVersionName") as String?) ?: "1.0.0"
+
+// Read signing credentials from local.properties (gitignored — never committed)
+val localProps = java.util.Properties()
+val localPropsFile = rootProject.file("local.properties")
+if (localPropsFile.exists()) localProps.load(localPropsFile.inputStream())
 
 android {
     namespace = "com.nseassist"
@@ -20,13 +27,27 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    signingConfigs {
+        create("release") {
+            storeFile     = file(localProps.getProperty("KEYSTORE_FILE", "keystore/nseassist-release.jks"))
+            storePassword = localProps.getProperty("KEYSTORE_PASSWORD", "")
+            keyAlias      = localProps.getProperty("KEY_ALIAS", "nseassist")
+            keyPassword   = localProps.getProperty("KEY_PASSWORD", "")
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
+            signingConfig   = signingConfigs.getByName("release")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            firebaseAppDistribution {
+                releaseNotes = "v${appVersionName} — latest build"
+                groups       = "testers"
+            }
         }
     }
 

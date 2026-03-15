@@ -22,6 +22,9 @@ gradle/wrapper/gradle-wrapper.jar
 *.hprof
 *.prof
 
+# Firebase — contains project IDs, keep out of version control
+app/google-services.json
+
 # Cloudflare Worker secrets
 cloudflare-worker/.dev.vars
 

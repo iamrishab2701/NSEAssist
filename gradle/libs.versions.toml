@@ -15,6 +15,8 @@ coroutines = "1.8.1"
 gson = "2.11.0"
 navigationCompose = "2.7.7"
 viewmodelCompose = "2.8.4"
+googleServices = "4.4.2"
+firebaseAppdistribution = "5.0.0"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -46,3 +48,5 @@ viewmodel-compose = { group = "androidx.lifecycle", name = "lifecycle-viewmodel-
 android-application = { id = "com.android.application", version.ref = "agp" }
 kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
 kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
+google-services = { id = "com.google.gms.google-services", version.ref = "googleServices" }
+firebase-appdistribution = { id = "com.google.firebase.appdistribution", version.ref = "firebaseAppdistribution" }
