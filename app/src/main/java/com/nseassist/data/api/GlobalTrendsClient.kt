@@ -43,11 +43,12 @@ object GlobalTrendsClient {
                 india       = parseIndexList(json.optJSONArray("india")),
                 commodities = parseIndexList(json.optJSONArray("commodities")),
                 forex       = parseIndexList(json.optJSONArray("forex")),
+                adrs        = parseIndexList(json.optJSONArray("adrs")),
                 impacts     = parseImpactCards(json.optJSONArray("impacts")),
                 overallBias = json.optString("overallBias", "NEUTRAL"),
                 cachedAt    = json.optLong("cachedAt", System.currentTimeMillis()),
             )
-            Log.d(TAG, "← us=${data.us.size} asia=${data.asia.size} india=${data.india.size} impacts=${data.impacts.size} bias=${data.overallBias}")
+            Log.d(TAG, "← us=${data.us.size} asia=${data.asia.size} india=${data.india.size} adrs=${data.adrs.size} impacts=${data.impacts.size} bias=${data.overallBias}")
             data
         }.getOrElse {
             Log.e(TAG, "Parse error: ${it.message}")
@@ -74,14 +75,15 @@ object GlobalTrendsClient {
         return (0 until arr.length()).map { i ->
             val o = arr.getJSONObject(i)
             ImpactCard(
-                foreignSymbol    = o.optString("foreignSymbol"),
-                foreignName      = o.optString("foreignName"),
-                foreignChangePct = o.optDouble("foreignChangePct", 0.0),
-                direction        = o.optString("direction",        "UP"),
-                sector           = o.optString("sector"),
-                impactDirection  = o.optString("impactDirection",  "POSITIVE"),
-                indianStocks     = parseImpactedStocks(o.optJSONArray("indianStocks")),
-                newsHeadlines    = parseStringList(o.optJSONArray("newsHeadlines")),
+                foreignSymbol       = o.optString("foreignSymbol"),
+                foreignName         = o.optString("foreignName"),
+                foreignChangePct    = o.optDouble("foreignChangePct", 0.0),
+                direction           = o.optString("direction",        "UP"),
+                sector              = o.optString("sector"),
+                impactDirection     = o.optString("impactDirection",  "POSITIVE"),
+                indianStocks        = parseImpactedStocks(o.optJSONArray("indianStocks")),
+                newsHeadlines       = parseStringList(o.optJSONArray("newsHeadlines")),
+                correlationStrength = o.optString("correlationStrength", "MODERATE"),
             )
         }
     }

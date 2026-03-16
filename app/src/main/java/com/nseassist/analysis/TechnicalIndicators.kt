@@ -95,22 +95,38 @@ class TechnicalIndicators {
     }
 
     // ── Price Prediction (Linear Regression + ATR) ───────────────────────────────
-    fun predictPrice(closes: List<Double>, atr: Double): PricePrediction {
+    //
+    // When volumes is non-null and non-empty, uses volume-weighted least squares:
+    //   weight_i = volume_i / avg_volume
+    // High-volume days carry more signal; low-volume days are discounted.
+    // Falls back to ordinary regression when volumes is null (existing callers unaffected).
+    fun predictPrice(closes: List<Double>, atr: Double, volumes: List<Double>? = null): PricePrediction {
         if (closes.size < 10) {
             val ltp = closes.lastOrNull() ?: 0.0
             return PricePrediction(ltp + atr, ltp - atr, "Sideways", 50)
         }
 
-        // Simple linear regression on last 30 days
         val window = closes.takeLast(30)
         val n = window.size
-        val xMean = (n - 1) / 2.0
-        val yMean = window.average()
+
+        // Build weights — use volume if available, uniform otherwise
+        val rawVols = volumes?.takeLast(n)
+        val weights: List<Double> = if (!rawVols.isNullOrEmpty() && rawVols.size == n) {
+            val avgVol = rawVols.average().coerceAtLeast(1.0)
+            rawVols.map { (it / avgVol).coerceIn(0.1, 5.0) }  // clamp: outliers don't dominate
+        } else {
+            List(n) { 1.0 }
+        }
+
+        val wSum   = weights.sum().coerceAtLeast(1e-9)
+        val xMean  = weights.indices.sumOf { i -> weights[i] * i } / wSum
+        val yMean  = weights.indices.sumOf { i -> weights[i] * window[i] } / wSum
+
         var num = 0.0
         var den = 0.0
         for (i in window.indices) {
-            num += (i - xMean) * (window[i] - yMean)
-            den += (i - xMean) * (i - xMean)
+            num += weights[i] * (i - xMean) * (window[i] - yMean)
+            den += weights[i] * (i - xMean) * (i - xMean)
         }
         val slope = if (den != 0.0) num / den else 0.0
         val predictedClose = window.last() + slope  // next session projection

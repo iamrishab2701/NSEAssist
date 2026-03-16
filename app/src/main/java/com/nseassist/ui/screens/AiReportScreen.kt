@@ -13,11 +13,14 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Scaffold
@@ -28,9 +31,13 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.navigation.NavController
 import com.nseassist.data.model.AiAnalysisReport
 import com.nseassist.data.model.AiTradeDirection
+import com.nseassist.data.model.PaperTradeRequest
 import com.nseassist.ui.viewmodel.ExportState
 import androidx.compose.ui.graphics.Color
 import com.nseassist.ui.theme.AppGradientBackground
@@ -38,6 +45,7 @@ import com.nseassist.ui.theme.BluePrimary
 import com.nseassist.ui.theme.CardDark
 import com.nseassist.ui.theme.GreenBull
 import com.nseassist.ui.theme.RedBear
+import com.nseassist.ui.theme.DividerColor
 import com.nseassist.ui.theme.SurfaceDark
 import com.nseassist.ui.theme.TextPrimary
 import com.nseassist.ui.theme.TextSecondary
@@ -78,7 +86,11 @@ fun AiReportScreen(navController: NavController, vm: MainViewModel) {
             analysisState == null -> EmptyAiReportState(padding)
             analysisState is UiState.Loading -> LoadingAiState(padding, "Analysing with AI…", null)
             analysisState is UiState.Error -> ErrorAiState(message = (analysisState as UiState.Error).message, padding = padding, onBack = { navController.popBackStack() })
-            analysisState is UiState.Success -> AiReportContent(report = (analysisState as UiState.Success<AiAnalysisReport>).data, padding = padding)
+            analysisState is UiState.Success -> AiReportContent(
+                report          = (analysisState as UiState.Success<AiAnalysisReport>).data,
+                padding         = padding,
+                onLogPrimaryTrade = { trade -> vm.logPaperTrade(trade) },
+            )
             else -> EmptyAiReportState(padding)
         }
     }
@@ -129,7 +141,11 @@ private fun ErrorAiState(message: String, padding: PaddingValues, onBack: () -> 
 }
 
 @Composable
-private fun AiReportContent(report: AiAnalysisReport, padding: PaddingValues) {
+private fun AiReportContent(
+    report: AiAnalysisReport,
+    padding: PaddingValues,
+    onLogPrimaryTrade: (PaperTradeRequest) -> Unit,
+) {
     LazyColumn(
         modifier = Modifier.fillMaxSize().padding(padding),
         contentPadding = PaddingValues(16.dp),
@@ -158,6 +174,25 @@ private fun AiReportContent(report: AiAnalysisReport, padding: PaddingValues) {
                 entryView = report.primaryPick.entryView,
                 stopLoss = report.primaryPick.stopLoss,
                 target = report.primaryPick.target,
+                onLogTrade = if (report.primaryPick.direction != AiTradeDirection.NO_TRADE) {
+                    {
+                        onLogPrimaryTrade(PaperTradeRequest(
+                            symbol       = report.primaryPick.symbol,
+                            companyName  = report.primaryPick.companyName,
+                            direction    = if (report.primaryPick.direction == AiTradeDirection.LONG) "BUY" else "SELL",
+                            entryPrice   = 0.0,
+                            targetText   = report.primaryPick.target,
+                            stopLossText = report.primaryPick.stopLoss,
+                            quantity     = 0,
+                            sessionPhase = "",
+                            aiProvider   = report.provider.label,
+                            confidence   = report.primaryPick.confidence,
+                            verdict      = "GO",
+                            rrRatio      = "",
+                            reason       = report.primaryPick.rationale.take(200),
+                        ))
+                    }
+                } else null,
             )
         }
         report.additionalCandidates.forEachIndexed { index, candidate ->
@@ -219,6 +254,7 @@ private fun RecommendationCard(
     entryView: String,
     stopLoss: String,
     target: String,
+    onLogTrade: (() -> Unit)? = null,
 ) {
     val directionColor = when (direction) {
         AiTradeDirection.LONG -> GreenBull
@@ -238,6 +274,21 @@ private fun RecommendationCard(
             if (entryView.isNotBlank()) Text("Entry: $entryView", color = TextSecondary, fontSize = 12.sp)
             if (stopLoss.isNotBlank()) Text("Stop Loss: $stopLoss", color = TextSecondary, fontSize = 12.sp)
             if (target.isNotBlank()) Text("Target: $target", color = TextSecondary, fontSize = 12.sp)
+
+            if (onLogTrade != null) {
+                HorizontalDivider(color = DividerColor, thickness = 0.5.dp)
+                var logged by remember { mutableStateOf(false) }
+                Button(
+                    onClick = { if (!logged) { onLogTrade(); logged = true } },
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = if (logged) GreenBull.copy(alpha = 0.5f) else GreenBull,
+                        contentColor = Color.White,
+                    ),
+                ) {
+                    Text(if (logged) "Logged ✓" else "Log Paper Trade")
+                }
+            }
         }
     }
 }

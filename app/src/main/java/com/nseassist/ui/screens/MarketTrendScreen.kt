@@ -77,6 +77,15 @@ private fun GlobalTrendsContent(data: GlobalTrendsData, onRefresh: () -> Unit) {
         IndexSection(title = "Commodities & Forex", items = data.commodities + data.forex)
     }
 
+    // Indian ADRs — direct pre-market signals
+    if (data.adrs.isNotEmpty()) {
+        IndexSection(
+            title = "Indian ADRs (US-listed)",
+            items = data.adrs,
+            subtitle = "ADR overnight moves = direct signal for NSE open",
+        )
+    }
+
     // Impact Cards
     if (data.impacts.isNotEmpty()) {
         Text(
@@ -132,13 +141,16 @@ private fun OverallBiasBanner(bias: String) {
 }
 
 @Composable
-private fun IndexSection(title: String, items: List<GlobalIndexItem>) {
+private fun IndexSection(title: String, items: List<GlobalIndexItem>, subtitle: String? = null) {
     Card(
         colors = CardDefaults.cardColors(containerColor = CardDark),
         modifier = Modifier.fillMaxWidth(),
     ) {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Text(title, fontWeight = FontWeight.Bold, fontSize = 15.sp, color = TextPrimary)
+            if (subtitle != null) {
+                Text(subtitle, color = TextSecondary, fontSize = 11.sp)
+            }
             HorizontalDivider(color = DividerColor)
             items.forEach { item ->
                 IndexItemRow(item)
@@ -221,6 +233,23 @@ private fun ImpactCardView(card: ImpactCard) {
                         color = TextSecondary,
                         fontSize = 11.sp,
                     )
+                    val strengthColor = when (card.correlationStrength) {
+                        "STRONG"   -> GreenBull
+                        "MODERATE" -> AmberWarn
+                        else       -> TextSecondary
+                    }
+                    Surface(
+                        shape = RoundedCornerShape(4.dp),
+                        color = strengthColor.copy(alpha = 0.15f),
+                    ) {
+                        Text(
+                            "${card.correlationStrength} correlation",
+                            color = strengthColor,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Medium,
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                        )
+                    }
                 }
                 Surface(
                     shape = RoundedCornerShape(6.dp),
