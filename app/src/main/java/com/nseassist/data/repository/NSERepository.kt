@@ -177,7 +177,7 @@ class NSERepository {
             }
             val profileDeferred  = async { cachedProfile(yahooSymbol) }
             val intradayDeferred = async {
-                withTimeoutOrNull(15_000L) { YahooFinanceClient.get5MinData(yahooSymbol) }
+                withTimeoutOrNull(15_000L) { YahooFinanceClient.get30MinData(yahooSymbol) }
             }
 
             val quoteList = quoteDeferred.await()    ?: emptyList()
@@ -243,22 +243,22 @@ class NSERepository {
                 else -> "FLAT"
             }
 
-            // ── 5-min intraday analysis ──────────────────────────────────────
-            val fiveMinBars = intraday?.candles ?: emptyList()
-            val fiveMinCandle = if (fiveMinBars.size >= 2) {
+            // ── 30-min intraday analysis ─────────────────────────────────────
+            val thirtyMinBars = intraday?.candles ?: emptyList()
+            val thirtyMinCandle = if (thirtyMinBars.size >= 2) {
                 indicators.detectCandlePattern(
-                    opens  = fiveMinBars.map { it.open },
-                    highs  = fiveMinBars.map { it.high },
-                    lows   = fiveMinBars.map { it.low },
-                    closes = fiveMinBars.map { it.close },
+                    opens  = thirtyMinBars.map { it.open },
+                    highs  = thirtyMinBars.map { it.high },
+                    lows   = thirtyMinBars.map { it.low },
+                    closes = thirtyMinBars.map { it.close },
                 )
             } else null
 
-            val supertrend5m = if (fiveMinBars.size >= 10) {
+            val supertrend30m = if (thirtyMinBars.size >= 10) {
                 indicators.supertrend(
-                    highs   = fiveMinBars.map { it.high },
-                    lows    = fiveMinBars.map { it.low },
-                    closes  = fiveMinBars.map { it.close },
+                    highs   = thirtyMinBars.map { it.high },
+                    lows    = thirtyMinBars.map { it.low },
+                    closes  = thirtyMinBars.map { it.close },
                 )
             } else null
 
@@ -280,6 +280,13 @@ class NSERepository {
 
             val sessionPhase = currentSessionPhase()
 
+            // Nudge prediction confidence based on 15-min candle + Supertrend signal
+            val nudgedConfidence = nudgeConfidence(
+                base          = prediction.confidence,
+                candleSignal  = thirtyMinCandle?.signal,
+                supertrendSig = supertrend30m?.signal ?: "NEUTRAL",
+            )
+
             val stockData = StockData(
                 symbol      = cleanSymbol,
                 name        = quote.name.ifBlank { cleanSymbol },
@@ -296,7 +303,7 @@ class NSERepository {
                 predictedHigh        = prediction.high,
                 predictedLow         = prediction.low,
                 predictedDirection   = prediction.direction,
-                predictionConfidence = prediction.confidence,
+                predictionConfidence = nudgedConfidence,
                 atr         = atr,
                 bollingerUpper  = bollinger.upper,
                 bollingerMiddle = bollinger.middle,
@@ -316,12 +323,12 @@ class NSERepository {
                 industry    = profile?.industry.orEmpty(),
                 priceHistory  = closes,
                 volumeHistory = volumes.map { it.toLong() },
-                fiveMinPattern      = fiveMinCandle?.type  ?: "NONE",
-                fiveMinPatternLabel = fiveMinCandle?.label ?: "",
-                fiveMinSignal       = fiveMinCandle?.signal?.name ?: "NEUTRAL",
+                thirtyMinPattern      = thirtyMinCandle?.type  ?: "NONE",
+                thirtyMinPatternLabel = thirtyMinCandle?.label ?: "",
+                thirtyMinSignal       = thirtyMinCandle?.signal?.name ?: "NEUTRAL",
                 orbHigh             = intraday?.orbHigh  ?: 0.0,
                 orbLow              = intraday?.orbLow   ?: 0.0,
-                supertrendSignal    = supertrend5m?.signal ?: "NEUTRAL",
+                supertrendSignal    = supertrend30m?.signal ?: "NEUTRAL",
                 pivotCpp            = pivots?.cpp ?: 0.0,
                 pivotR1             = pivots?.r1  ?: 0.0,
                 pivotS1             = pivots?.s1  ?: 0.0,
@@ -333,7 +340,7 @@ class NSERepository {
             val score  = (scorer.score(stockData, marketCondition) + newsImpact).coerceIn(0.0, 100.0)
             val option = scorer.optionAction(stockData)
             val enriched = stockData.copy(score = score, optionAction = option, news = news, newsImpactScore = newsImpact, isDeepEnriched = true)
-            val quickTake = generateQuickTake(enriched, fiveMinCandle, pivots, supertrend5m?.signal ?: "NEUTRAL")
+            val quickTake = generateQuickTake(enriched, thirtyMinCandle, pivots, supertrend30m?.signal ?: "NEUTRAL")
             enriched.copy(quickTake = quickTake)
         }
     }
@@ -383,14 +390,18 @@ class NSERepository {
                 val cleanSymbol = phase1.symbol.removeSuffix(".NS")
                 val yahooSymbol = "$cleanSymbol.NS"
 
-                // Fetch history (60 days) and profile in parallel — skip quote fetch
-                val historyDeferred = async {
+                // Fetch history (60 days), profile, and 5-min data in parallel — skip quote fetch
+                val historyDeferred  = async {
                     withTimeoutOrNull(25_000L) { YahooFinanceClient.getHistory(yahooSymbol, days = 60) }
                 }
-                val profileDeferred = async { cachedProfile(yahooSymbol) }
+                val profileDeferred  = async { cachedProfile(yahooSymbol) }
+                val intradayDeferred = async {
+                    withTimeoutOrNull(15_000L) { YahooFinanceClient.get30MinData(yahooSymbol) }
+                }
 
-                val history = historyDeferred.await() ?: emptyList()
-                val profile = profileDeferred.await()
+                val history  = historyDeferred.await()  ?: emptyList()
+                val profile  = profileDeferred.await()
+                val intraday = intradayDeferred.await()
 
                 // News only on detail screen (same as analyseStock)
                 val news = if (fetchNews) {
@@ -439,6 +450,49 @@ class NSERepository {
                 val trend2W    = indicators.trend2Week(closes)
                 val prediction = indicators.predictPrice(closes, atr)
 
+                // ── 30-min intraday analysis ─────────────────────────────────
+                val thirtyMinBars = intraday?.candles ?: emptyList()
+                val thirtyMinCandle = if (thirtyMinBars.size >= 2) {
+                    indicators.detectCandlePattern(
+                        opens  = thirtyMinBars.map { it.open },
+                        highs  = thirtyMinBars.map { it.high },
+                        lows   = thirtyMinBars.map { it.low },
+                        closes = thirtyMinBars.map { it.close },
+                    )
+                } else null
+
+                val supertrend30m = if (thirtyMinBars.size >= 10) {
+                    indicators.supertrend(
+                        highs  = thirtyMinBars.map { it.high },
+                        lows   = thirtyMinBars.map { it.low },
+                        closes = thirtyMinBars.map { it.close },
+                    )
+                } else null
+
+                val pivots = if ((intraday?.pivotCpp ?: 0.0) > 0) {
+                    TechnicalIndicators.PivotPoints(
+                        cpp = intraday!!.pivotCpp,
+                        r1  = intraday.pivotR1,
+                        r2  = intraday.pivotR2,
+                        s1  = intraday.pivotS1,
+                        s2  = intraday.pivotS2,
+                    )
+                } else if (highs.size >= 2) {
+                    val pH = highs.dropLast(1).last()
+                    val pL = lows.dropLast(1).last()
+                    val pC = closes.dropLast(1).last()
+                    indicators.pivotPoints(pH, pL, pC)
+                } else null
+
+                val sessionPhase = currentSessionPhase()
+
+                // Nudge prediction confidence based on 15-min candle + Supertrend signal
+                val nudgedConfidence = nudgeConfidence(
+                    base          = prediction.confidence,
+                    candleSignal  = thirtyMinCandle?.signal,
+                    supertrendSig = supertrend30m?.signal ?: "NEUTRAL",
+                )
+
                 val stockData = phase1.copy(
                     vwap      = vwap,
                     aboveVwap = ltp > vwap,
@@ -452,7 +506,7 @@ class NSERepository {
                     predictedHigh        = prediction.high,
                     predictedLow         = prediction.low,
                     predictedDirection   = prediction.direction,
-                    predictionConfidence = prediction.confidence,
+                    predictionConfidence = nudgedConfidence,
                     atr = atr,
                     bollingerUpper  = bollinger.upper,
                     bollingerMiddle = bollinger.middle,
@@ -469,6 +523,16 @@ class NSERepository {
                     priceHistory  = closes,
                     volumeHistory = volumes.map { it.toLong() },
                     news          = news,
+                    thirtyMinPattern      = thirtyMinCandle?.type  ?: "NONE",
+                    thirtyMinPatternLabel = thirtyMinCandle?.label ?: "",
+                    thirtyMinSignal       = thirtyMinCandle?.signal?.name ?: "NEUTRAL",
+                    orbHigh             = intraday?.orbHigh  ?: 0.0,
+                    orbLow              = intraday?.orbLow   ?: 0.0,
+                    supertrendSignal    = supertrend30m?.signal ?: "NEUTRAL",
+                    pivotCpp            = pivots?.cpp ?: 0.0,
+                    pivotR1             = pivots?.r1  ?: 0.0,
+                    pivotS1             = pivots?.s1  ?: 0.0,
+                    sessionPhase        = sessionPhase,
                     isDeepEnriched = true,
                 )
 
@@ -476,7 +540,9 @@ class NSERepository {
                 val newsImpact = newsImpact(news)
                 val score  = (scorer.score(stockData, marketCondition) + newsImpact).coerceIn(0.0, 100.0)
                 val option = scorer.optionAction(stockData)
-                stockData.copy(score = score, optionAction = option, newsImpactScore = newsImpact)
+                val enriched = stockData.copy(score = score, optionAction = option, newsImpactScore = newsImpact)
+                val quickTake = generateQuickTake(enriched, thirtyMinCandle, pivots, supertrend30m?.signal ?: "NEUTRAL")
+                enriched.copy(quickTake = quickTake)
             }
         }
 
@@ -580,7 +646,7 @@ class NSERepository {
 
     private fun generateQuickTake(
         stock: StockData,
-        fiveMinCandle: TechnicalIndicators.CandlePattern?,
+        thirtyMinCandle: TechnicalIndicators.CandlePattern?,
         pivots: TechnicalIndicators.PivotPoints?,
         supertrendSignal: String,
     ): QuickTake {
@@ -592,13 +658,13 @@ class NSERepository {
 
         // ── SITUATION ────────────────────────────────────────────────────────
         val patternDesc = when {
-            fiveMinCandle != null && fiveMinCandle.type != "NONE" -> when (fiveMinCandle.signal) {
+            thirtyMinCandle != null && thirtyMinCandle.type != "NONE" -> when (thirtyMinCandle.signal) {
                 TechnicalIndicators.CandleSignal.BULLISH ->
-                    "The last 5-min candle shows a ${fiveMinCandle.type.lowercase().replace("_", " ")} — buyers are stepping in."
+                    "The last 15-min candle shows a ${thirtyMinCandle.type.lowercase().replace("_", " ")} — buyers are stepping in."
                 TechnicalIndicators.CandleSignal.BEARISH ->
-                    "The last 5-min candle shows a ${fiveMinCandle.type.lowercase().replace("_", " ")} — sellers are taking over."
+                    "The last 15-min candle shows a ${thirtyMinCandle.type.lowercase().replace("_", " ")} — sellers are taking over."
                 else ->
-                    "The last 5-min candle is a Doji — price is undecided right now."
+                    "The last 15-min candle is a Doji — price is undecided right now."
             }
             stock.aboveVwap -> "Price is above the day's average (VWAP) — buyers are in control."
             else            -> "Price is below the day's average (VWAP) — sellers have the upper hand."
@@ -607,10 +673,10 @@ class NSERepository {
 
         // ── ACTION ────────────────────────────────────────────────────────────
         val isBullish = stock.optionAction in listOf("STRONG BUY", "POSSIBLE BUY") &&
-                        (fiveMinCandle?.signal != TechnicalIndicators.CandleSignal.BEARISH) &&
+                        (thirtyMinCandle?.signal != TechnicalIndicators.CandleSignal.BEARISH) &&
                         stock.aboveVwap
         val isBearish = stock.optionAction == "AVOID" ||
-                        fiveMinCandle?.signal == TechnicalIndicators.CandleSignal.BEARISH
+                        thirtyMinCandle?.signal == TechnicalIndicators.CandleSignal.BEARISH
 
         val entryPrice  = if (isBullish) ltp + atr * 0.1 else ltp - atr * 0.1
         val targetPrice = if (isBullish) ltp + atr * 1.2 else ltp - atr * 1.2
@@ -659,7 +725,7 @@ class NSERepository {
             stock.rsi > 68  -> "RSI is near overbought — keep your stop loss tight, don't chase."
             stock.rsi < 32  -> "RSI is near oversold — wait for a bounce confirmation before buying."
             !stock.aboveVwap && isBullish -> "Price is below VWAP — only buy if it crosses VWAP first."
-            else -> "Exit immediately if price closes below ${fmt(if (isBullish) stopPrice else ltp - atr)} on a 5-min candle."
+            else -> "Exit immediately if price closes below ${fmt(if (isBullish) stopPrice else ltp - atr)} on a 15-min candle."
         }
 
         // ── CONFIDENCE (session-adjusted) ────────────────────────────────────
@@ -677,26 +743,52 @@ class NSERepository {
             else        -> "Market is closed. This analysis is based on the last trading session."
         }
 
-        // ── 5-MIN SUMMARY ─────────────────────────────────────────────────────
+        // ── 15-MIN SUMMARY ────────────────────────────────────────────────────
         val stDesc = when (supertrendSignal) { "BUY" -> " Supertrend: BUY." "SELL" -> " Supertrend: SELL." else -> "" }
-        val fiveMinSummary = buildString {
-            append("Last 5-min: ")
-            if (fiveMinCandle != null && fiveMinCandle.type != "NONE") append("${fiveMinCandle.label}. ")
+        val thirtyMinSummary = buildString {
+            append("Last 15-min: ")
+            if (thirtyMinCandle != null && thirtyMinCandle.type != "NONE") append("${thirtyMinCandle.label}. ")
             append(if (stock.aboveVwap) "Above VWAP — momentum UP." else "Below VWAP — momentum DOWN.")
             append(stDesc)
         }
 
         return QuickTake(
-            headline      = headline,
-            action        = action,
-            target        = target,
-            stopLoss      = stopLoss,
-            why           = why,
-            warning       = warning,
-            confidence    = adjustedConf,
-            sessionPhase  = stock.sessionPhase,
-            sessionNote   = sessionNote,
-            fiveMinSummary = fiveMinSummary,
+            headline         = headline,
+            action           = action,
+            target           = target,
+            stopLoss         = stopLoss,
+            why              = why,
+            warning          = warning,
+            confidence       = adjustedConf,
+            sessionPhase     = stock.sessionPhase,
+            sessionNote      = sessionNote,
+            thirtyMinSummary = thirtyMinSummary,
         )
+    }
+
+    // ── Confidence nudge ─────────────────────────────────────────────────────
+
+    /**
+     * Adjusts the daily prediction confidence based on the 30-min closing candle and Supertrend.
+     * Both signals agree bullish  → +10 pts.  One bullish signal → +5 pts.
+     * Both signals agree bearish  → −15 pts.  One bearish signal → −8 pts.
+     * No 30-min data available    → unchanged.
+     */
+    private fun nudgeConfidence(
+        base: Int,
+        candleSignal: TechnicalIndicators.CandleSignal?,
+        supertrendSig: String,
+    ): Int {
+        val candleBull = candleSignal == TechnicalIndicators.CandleSignal.BULLISH
+        val candleBear = candleSignal == TechnicalIndicators.CandleSignal.BEARISH
+        val stBull     = supertrendSig == "BUY"
+        val stBear     = supertrendSig == "SELL"
+        return when {
+            candleBull && stBull -> (base + 10).coerceIn(0, 100)
+            candleBear && stBear -> (base - 15).coerceIn(0, 100)
+            candleBull || stBull -> (base + 5).coerceIn(0, 100)
+            candleBear || stBear -> (base - 8).coerceIn(0, 100)
+            else                 -> base
+        }
     }
 }

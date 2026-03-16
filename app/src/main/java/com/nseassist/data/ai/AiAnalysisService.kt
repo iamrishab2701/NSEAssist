@@ -419,6 +419,45 @@ class AiAnalysisService {
             appendLine("System Signal   : ${stock.optionAction}")
             appendLine()
 
+            appendLine("--- 15-MIN INTRADAY ANALYSIS ---")
+            appendLine("Session Phase   : ${stock.sessionPhase}")
+            if (stock.orbHigh > 0.0) {
+                appendLine("ORB High (9:15–9:45 AM) : Rs ${"%.2f".format(stock.orbHigh)}")
+                appendLine("ORB Low  (9:15–9:45 AM) : Rs ${"%.2f".format(stock.orbLow)}")
+                val orbStatus = when {
+                    stock.ltp > stock.orbHigh -> "ABOVE ORB — bullish breakout confirmed"
+                    stock.ltp < stock.orbLow  -> "BELOW ORB — bearish breakdown confirmed"
+                    else                      -> "INSIDE ORB — wait for breakout direction"
+                }
+                appendLine("Price vs ORB    : $orbStatus")
+            } else {
+                appendLine("ORB             : Not available (market may be closed or data unavailable)")
+            }
+            appendLine("15-min Pattern  : ${stock.thirtyMinPattern}")
+            if (stock.thirtyMinPattern != "NONE") {
+                appendLine("Pattern Signal  : ${stock.thirtyMinSignal}")
+                if (stock.thirtyMinPatternLabel.isNotBlank()) appendLine("Pattern Meaning : ${stock.thirtyMinPatternLabel}")
+            }
+            appendLine("Supertrend (15m): ${stock.supertrendSignal}  (BUY=price above band/bullish, SELL=price below band/bearish)")
+            if (stock.pivotCpp > 0.0) {
+                appendLine("Pivot CPP       : Rs ${"%.2f".format(stock.pivotCpp)}")
+                appendLine("Pivot R1        : Rs ${"%.2f".format(stock.pivotR1)}")
+                appendLine("Pivot S1        : Rs ${"%.2f".format(stock.pivotS1)}")
+                val pivotStatus = when {
+                    stock.ltp > stock.pivotR1  -> "Above R1 — strong bullish momentum"
+                    stock.ltp < stock.pivotS1  -> "Below S1 — weak/bearish zone"
+                    stock.ltp > stock.pivotCpp -> "Above CPP — mild bullish bias"
+                    else                       -> "Below CPP — mild bearish bias"
+                }
+                appendLine("Price vs Pivot  : $pivotStatus")
+            }
+            stock.quickTake?.let { qt ->
+                appendLine("Quick Take      : ${qt.action}")
+                appendLine("15-min Summary  : ${qt.thirtyMinSummary}")
+                appendLine("Quick Confidence: ${qt.confidence}/100")
+            }
+            appendLine()
+
             news?.let { n ->
                 appendLine("--- LIVE NEWS (Last 24h) ---")
                 appendLine("Overall Sentiment : ${n.sentiment.name}")
@@ -481,6 +520,33 @@ class AiAnalysisService {
                 stock.news?.let { news ->
                     if (news.stockSentiment.name != "NONE") append(" | stockNews=${news.stockSentiment.name}")
                     if (news.sectorSentiment.name != "NONE") append(" | sectorNews=${news.sectorSentiment.name}")
+                }
+                // 15-min intraday signals — most time-sensitive, highest priority for same-session entries
+                if (stock.thirtyMinPattern != "NONE") {
+                    append(" | intraday15m=${stock.thirtyMinPattern}(${stock.thirtyMinSignal})")
+                }
+                if (stock.supertrendSignal != "NEUTRAL") {
+                    append(" | supertrend15m=${stock.supertrendSignal}")
+                }
+                if (stock.orbHigh > 0.0) {
+                    val orbStatus = when {
+                        stock.ltp > stock.orbHigh -> "ABOVE_ORB"
+                        stock.ltp < stock.orbLow  -> "BELOW_ORB"
+                        else                      -> "INSIDE_ORB"
+                    }
+                    append(" | orbStatus=$orbStatus")
+                }
+                if (stock.pivotCpp > 0.0) {
+                    val pivotStatus = when {
+                        stock.ltp > stock.pivotR1  -> "ABOVE_R1"
+                        stock.ltp < stock.pivotS1  -> "BELOW_S1"
+                        stock.ltp > stock.pivotCpp -> "ABOVE_CPP"
+                        else                       -> "BELOW_CPP"
+                    }
+                    append(" | pivotPos=$pivotStatus")
+                }
+                if (stock.sessionPhase.isNotBlank() && stock.sessionPhase != "UNKNOWN") {
+                    append(" | session=${stock.sessionPhase}")
                 }
                 append(" | support=${"%.2f".format(stock.support)}")
                 append(" | resistance=${"%.2f".format(stock.resistance)}")
@@ -574,6 +640,11 @@ Signal interpretation guide:
 - support/resistance: key price levels for stop loss and target planning
 - atr: average daily price range, useful for realistic stop loss sizing
 - maxQty: maximum shares affordable within capital
+- intraday15m: 15-min candle pattern + signal (most time-sensitive — prioritize for same-session entries; BULLISH patterns favor long, BEARISH favor short/avoid)
+- supertrend15m: BUY = price above Supertrend band (bullish momentum on 15-min), SELL = below band (bearish)
+- orbStatus: ABOVE_ORB = bullish breakout above 9:15-9:45 AM opening range, BELOW_ORB = bearish breakdown, INSIDE_ORB = consolidating, wait for direction
+- pivotPos: ABOVE_R1 = strong momentum, ABOVE_CPP = mild bullish, BELOW_CPP = mild bearish, BELOW_S1 = weak/avoid long
+- session: MORNING = strongest momentum (best for entries), MIDDAY = slower/choppy (tighten targets), AFTERNOON = late session (ride trends only), CLOSED = next session analysis
 
 Rules:
 - Pick only from the provided list.
@@ -602,6 +673,13 @@ NON-NEGOTIABLE RULES:
 - If market is LIVE: signals and entry prices are actionable right now. Say so in your reason.
 - If market is CLOSED or WEEKEND: your analysis is for the NEXT session. Clearly state this in your reason — e.g. "Market is closed. This plan is for tomorrow's opening." Do NOT say "trade now."
 - If market is PRE-OPEN (9:00–9:15 AM): advise watching the opening range before entering.
+- The prompt includes a "15-MIN INTRADAY ANALYSIS" section. These are the MOST TIME-SENSITIVE signals — always analyze them first when market is LIVE.
+  - Supertrend (15m) BUY = strong bullish momentum on 15-min timeframe. SELL = avoid buying, potential short.
+  - ORB (Opening Range 9:15–9:45 AM): ABOVE ORB = confirmed bullish breakout. BELOW ORB = confirmed bearish breakdown. INSIDE ORB = wait.
+  - 15-min candle pattern: treat the same as daily patterns but with higher intraday relevance. MORNING_STAR/BULLISH_ENGULFING = buy. EVENING_STAR/BEARISH_ENGULFING = avoid long.
+  - Pivot levels: CPP is the neutral point. Above R1 = strong, Below S1 = weak.
+  - Quick Take confidence reflects all 15-min signals combined and is session-adjusted.
+- If 15-min signals contradict daily signals, the 15-min signals take priority for intraday decisions.
 - verdict must be "GO" or "NO-GO" only.
 - "GO" requires ALL of: confidence >= 65 AND R:R >= 1.5 AND quantity >= 1 AND stock LTP <= capital.
 - "NO-GO" if any condition fails, or if setup is unclear, choppy, or risky for a beginner.
@@ -628,7 +706,7 @@ Return ONLY valid JSON — no markdown, no explanation, no extra text:
   "rr_ratio": "1 : 2.4",
   "confidence": 78,
   "reason": "Price above VWAP with RSI at 58 in sweet spot and EMA20 > EMA50 bullish structure. Volume spike of 2.1x confirms institutional participation in the move.",
-  "risk": "Exit immediately if price closes a 5-minute candle below Rs 840 — that would break the VWAP support and invalidate the setup.",
+  "risk": "Exit immediately if price closes a 15-minute candle below Rs 840 — that would break the VWAP support and invalidate the setup.",
   "disclaimer": "AI suggestions are informational only and not SEBI-registered financial advice."
 }
         """

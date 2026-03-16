@@ -41,9 +41,9 @@ let _trendsBody = null;
 let _trendsTs   = 0;
 const TRENDS_TTL = 15 * 60 * 1000;
 
-// ── Intraday 5-min cache (per symbol) ─────────────────────────────────────────
+// ── Intraday 15-min cache (per symbol) ────────────────────────────────────────
 const _intradayCache = new Map();   // symbol → { body: string, ts: number }
-const INTRADAY_TTL   = 5 * 60 * 1000;  // 5 minutes
+const INTRADAY_TTL   = 15 * 60 * 1000;  // 15 minutes (matches candle interval)
 
 // ── Indian sector map cache ───────────────────────────────────────────────────
 let _indSectors   = null; // Map<sector, ImpactedStock[]>
@@ -1088,7 +1088,7 @@ async function handleIntraday(searchParams) {
     return new Response(cached.body, { headers: { ...corsHeaders(), "Content-Type": "application/json", "X-Cache": "HIT" } });
   }
 
-  // Fetch today's 5-min bars + 5-day daily (for pivot calculation)
+  // Fetch today's 15-min bars + 5-day daily (for pivot calculation)
   // Uses v8/chart which works without crumb from Cloudflare datacenters
   async function chartFetch(url) {
     for (const base of [YAHOO1, YAHOO2]) {
@@ -1101,11 +1101,11 @@ async function handleIntraday(searchParams) {
   }
 
   const [intraDayRaw, dailyRaw] = await Promise.all([
-    chartFetch(`${YAHOO1}/v8/finance/chart/${enc(symbol)}?interval=5m&range=1d`),
+    chartFetch(`${YAHOO1}/v8/finance/chart/${enc(symbol)}?interval=15m&range=1d`),
     chartFetch(`${YAHOO1}/v8/finance/chart/${enc(symbol)}?interval=1d&range=5d`),
   ]);
 
-  // Parse 5-min candles
+  // Parse 15-min candles
   let candles = [];
   let orbHigh = 0, orbLow = 0;
   if (intraDayRaw) {
@@ -1124,7 +1124,7 @@ async function handleIntraday(searchParams) {
           volume: q.volume?.[i] ?? null,
         })).filter(c => c.open != null && c.high != null && c.low != null && c.close != null);
 
-        // ORB = first 2 candles (9:15 + 9:20 = opening range)
+        // ORB = first 2 candles (9:15–9:30 + 9:30–9:45 AM = 30-min opening range on 15-min bars)
         const orb = candles.slice(0, 2);
         orbHigh = orb.length ? Math.max(...orb.map(c => c.high)) : 0;
         orbLow  = orb.length ? Math.min(...orb.map(c => c.low))  : 0;

@@ -456,7 +456,7 @@ private fun StockDetailContent(stock: StockData, newsState: UiState<NewsResult?>
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
-        // Quick Take — plain English summary (shown only when 5-min data is available)
+        // Quick Take — plain English summary (shown only when 30-min data is available)
         stock.quickTake?.let { QuickTakeCard(it) }
 
         // Price header
@@ -835,14 +835,14 @@ private fun QuickTakeCard(qt: QuickTake) {
                 lineHeight = 20.sp,
             )
 
-            // 5-min signal summary
-            if (qt.fiveMinSummary.isNotBlank()) {
+            // 30-min signal summary
+            if (qt.thirtyMinSummary.isNotBlank()) {
                 Surface(
                     shape = RoundedCornerShape(8.dp),
                     color = CardDark,
                 ) {
                     Text(
-                        qt.fiveMinSummary,
+                        qt.thirtyMinSummary,
                         color = TextSecondary,
                         fontSize = 12.sp,
                         modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),

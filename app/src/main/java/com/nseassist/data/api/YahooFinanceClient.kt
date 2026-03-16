@@ -261,10 +261,10 @@ object YahooFinanceClient {
     )
 
     /**
-     * Fetches today's 5-min candles + ORB + pivot points via the Worker /intraday endpoint.
-     * Returns null on any error — 5-min data is optional; deep analysis still works without it.
+     * Fetches today's 15-min candles + ORB + pivot points via the Worker /intraday endpoint.
+     * Returns null on any error — 15-min data is optional; deep analysis still works without it.
      */
-    suspend fun get5MinData(symbol: String): IntradayData? {
+    suspend fun get30MinData(symbol: String): IntradayData? {
         if (!useWorker) return null
         val url = "$WORKER_URL/intraday?symbol=${URLEncoder.encode(symbol, "UTF-8")}"
         Log.d(TAG, "→ [worker] intraday $symbol")
@@ -294,7 +294,7 @@ object YahooFinanceClient {
                 pivotS2  = json.get("pivotS2")?.asDouble  ?: 0.0,
             )
         }.getOrElse {
-            Log.w(TAG, "5-min data error for $symbol: ${it.message}")
+            Log.w(TAG, "30-min data error for $symbol: ${it.message}")
             null
         }
     }
