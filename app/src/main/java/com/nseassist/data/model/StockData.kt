@@ -29,6 +29,21 @@ data class NewsResult(
     val articles: List<NewsArticle> = emptyList(),
 )
 
+// ── Quick Take — plain-English summary for beginners ──────────────────────────
+
+data class QuickTake(
+    val headline: String,       // "ADANIPOWER is at ₹154. The last 5-min candle shows a Hammer — buyers stepping in."
+    val action: String,         // "Buy above ₹155" or "Avoid — wait for signal"
+    val target: String,         // "Target: ₹158.50 (+2.2%)" or "—"
+    val stopLoss: String,       // "Stop Loss: ₹152.50 (-1.0%)" or "—"
+    val why: String,            // Plain English reason: RSI, volume, pivot context
+    val warning: String,        // "Exit if price closes below ₹152.50 on a 5-min candle."
+    val confidence: Int,        // 0–100, session-adjusted
+    val sessionPhase: String,   // "MORNING" / "MIDDAY" / "AFTERNOON" / "CLOSED"
+    val sessionNote: String,    // "Best time to trade. Momentum is strong in the morning."
+    val fiveMinSummary: String, // "Last 5-min: Bullish Engulfing above VWAP — momentum UP. Supertrend: BUY."
+)
+
 // ── Stock model ───────────────────────────────────────────────────────────────
 
 data class StockData(
@@ -101,6 +116,21 @@ data class StockData(
 
     // News (fetched only during deep analysis — never affects score)
     val news: NewsResult? = null,
+
+    // ── 5-min intraday analysis (fetched on detail screen only) ───────────────
+    val fiveMinPattern: String = "NONE",        // candlestick type on last 3 5-min candles
+    val fiveMinPatternLabel: String = "",        // human label e.g. "Bullish Engulfing"
+    val fiveMinSignal: String = "NEUTRAL",       // BULLISH / BEARISH / NEUTRAL
+    val orbHigh: Double = 0.0,                   // Opening Range high (9:15–9:25 AM)
+    val orbLow: Double = 0.0,                    // Opening Range low
+    val supertrendSignal: String = "NEUTRAL",    // BUY / SELL / NEUTRAL (on 5-min)
+    val pivotCpp: Double = 0.0,                  // Central Pivot Point
+    val pivotR1: Double = 0.0,                   // Resistance 1
+    val pivotS1: Double = 0.0,                   // Support 1
+    val sessionPhase: String = "UNKNOWN",        // MORNING / MIDDAY / AFTERNOON / CLOSED
+
+    // Plain-English summary card (generated after 5-min data is available)
+    val quickTake: QuickTake? = null,
 
     // True when analyseStock() has run on this stock (Phase 2 / detail fetch).
     // Stays false for Phase 1 quick-score stocks even if history happened to be unavailable.

@@ -9,6 +9,7 @@ import com.nseassist.data.api.YahooFinanceClient
 import com.nseassist.data.model.MarketOverview
 import com.nseassist.data.model.MarketStatus
 import com.nseassist.data.model.MoverItem
+import com.nseassist.data.model.QuickTake
 import com.nseassist.data.model.ScanCategory
 import com.nseassist.data.model.StockData
 import kotlinx.coroutines.Dispatchers
@@ -167,18 +168,22 @@ class NSERepository {
             val yahooSymbol  = "$cleanSymbol.NS"
             Log.d("NSERepository", "Deep analysis via Yahoo Finance: $yahooSymbol")
 
-            // Fetch quote, 90-day history, and asset profile in parallel
-            val quoteDeferred   = async {
+            // Fetch quote, 90-day history, asset profile, and 5-min data in parallel
+            val quoteDeferred    = async {
                 withTimeoutOrNull(20_000L) { YahooFinanceClient.getBatchQuotes(listOf(yahooSymbol)) }
             }
-            val historyDeferred = async {
+            val historyDeferred  = async {
                 withTimeoutOrNull(25_000L) { YahooFinanceClient.getHistory(yahooSymbol, days = 90) }
             }
-            val profileDeferred = async { cachedProfile(yahooSymbol) }
+            val profileDeferred  = async { cachedProfile(yahooSymbol) }
+            val intradayDeferred = async {
+                withTimeoutOrNull(15_000L) { YahooFinanceClient.get5MinData(yahooSymbol) }
+            }
 
-            val quoteList = quoteDeferred.await()  ?: emptyList()
-            val history   = historyDeferred.await() ?: emptyList()
+            val quoteList = quoteDeferred.await()    ?: emptyList()
+            val history   = historyDeferred.await()  ?: emptyList()
             val profile   = profileDeferred.await()
+            val intraday  = intradayDeferred.await()
 
             val quote = quoteList.firstOrNull()
                 ?: error("No data for $yahooSymbol — check internet connection")
@@ -238,6 +243,43 @@ class NSERepository {
                 else -> "FLAT"
             }
 
+            // ── 5-min intraday analysis ──────────────────────────────────────
+            val fiveMinBars = intraday?.candles ?: emptyList()
+            val fiveMinCandle = if (fiveMinBars.size >= 2) {
+                indicators.detectCandlePattern(
+                    opens  = fiveMinBars.map { it.open },
+                    highs  = fiveMinBars.map { it.high },
+                    lows   = fiveMinBars.map { it.low },
+                    closes = fiveMinBars.map { it.close },
+                )
+            } else null
+
+            val supertrend5m = if (fiveMinBars.size >= 10) {
+                indicators.supertrend(
+                    highs   = fiveMinBars.map { it.high },
+                    lows    = fiveMinBars.map { it.low },
+                    closes  = fiveMinBars.map { it.close },
+                )
+            } else null
+
+            val pivots = if ((intraday?.pivotCpp ?: 0.0) > 0) {
+                TechnicalIndicators.PivotPoints(
+                    cpp = intraday!!.pivotCpp,
+                    r1  = intraday.pivotR1,
+                    r2  = intraday.pivotR2,
+                    s1  = intraday.pivotS1,
+                    s2  = intraday.pivotS2,
+                )
+            } else if (highs.size >= 2) {
+                // Fallback: compute pivots from daily history if intraday unavailable
+                val pH = highs.dropLast(1).last()
+                val pL = lows.dropLast(1).last()
+                val pC = closes.dropLast(1).last()
+                indicators.pivotPoints(pH, pL, pC)
+            } else null
+
+            val sessionPhase = currentSessionPhase()
+
             val stockData = StockData(
                 symbol      = cleanSymbol,
                 name        = quote.name.ifBlank { cleanSymbol },
@@ -274,13 +316,25 @@ class NSERepository {
                 industry    = profile?.industry.orEmpty(),
                 priceHistory  = closes,
                 volumeHistory = volumes.map { it.toLong() },
+                fiveMinPattern      = fiveMinCandle?.type  ?: "NONE",
+                fiveMinPatternLabel = fiveMinCandle?.label ?: "",
+                fiveMinSignal       = fiveMinCandle?.signal?.name ?: "NEUTRAL",
+                orbHigh             = intraday?.orbHigh  ?: 0.0,
+                orbLow              = intraday?.orbLow   ?: 0.0,
+                supertrendSignal    = supertrend5m?.signal ?: "NEUTRAL",
+                pivotCpp            = pivots?.cpp ?: 0.0,
+                pivotR1             = pivots?.r1  ?: 0.0,
+                pivotS1             = pivots?.s1  ?: 0.0,
+                sessionPhase        = sessionPhase,
             )
 
             val marketCondition = cachedMarketCondition()
             val newsImpact = newsImpact(news)
             val score  = (scorer.score(stockData, marketCondition) + newsImpact).coerceIn(0.0, 100.0)
             val option = scorer.optionAction(stockData)
-            stockData.copy(score = score, optionAction = option, news = news, newsImpactScore = newsImpact, isDeepEnriched = true)
+            val enriched = stockData.copy(score = score, optionAction = option, news = news, newsImpactScore = newsImpact, isDeepEnriched = true)
+            val quickTake = generateQuickTake(enriched, fiveMinCandle, pivots, supertrend5m?.signal ?: "NEUTRAL")
+            enriched.copy(quickTake = quickTake)
         }
     }
 
@@ -504,5 +558,145 @@ class NSERepository {
         }
         if (news.stockArticleCount >= 4) impact += if (impact > 0) 1 else if (impact < 0) -1 else 0
         return impact.coerceIn(-6, 6)
+    }
+
+    // ── Session phase ─────────────────────────────────────────────────────────
+
+    private fun currentSessionPhase(): String {
+        val ist    = ZonedDateTime.now(ZoneId.of("Asia/Kolkata"))
+        val dow    = ist.dayOfWeek.value
+        if (dow >= 6) return "CLOSED"
+        val mins   = ist.hour * 60 + ist.minute
+        return when {
+            mins < 9 * 60 + 15   -> "CLOSED"
+            mins < 11 * 60 + 30  -> "MORNING"
+            mins < 13 * 60 + 30  -> "MIDDAY"
+            mins <= 15 * 60 + 30 -> "AFTERNOON"
+            else                 -> "CLOSED"
+        }
+    }
+
+    // ── Plain-English Quick Take generator ───────────────────────────────────
+
+    private fun generateQuickTake(
+        stock: StockData,
+        fiveMinCandle: TechnicalIndicators.CandlePattern?,
+        pivots: TechnicalIndicators.PivotPoints?,
+        supertrendSignal: String,
+    ): QuickTake {
+        fun fmt(v: Double) = "₹${String.format("%,.2f", v)}"
+        fun pct(v: Double) = String.format("%.1f", v)
+
+        val ltp = stock.ltp
+        val atr = stock.atr.coerceAtLeast(ltp * 0.005)
+
+        // ── SITUATION ────────────────────────────────────────────────────────
+        val patternDesc = when {
+            fiveMinCandle != null && fiveMinCandle.type != "NONE" -> when (fiveMinCandle.signal) {
+                TechnicalIndicators.CandleSignal.BULLISH ->
+                    "The last 5-min candle shows a ${fiveMinCandle.type.lowercase().replace("_", " ")} — buyers are stepping in."
+                TechnicalIndicators.CandleSignal.BEARISH ->
+                    "The last 5-min candle shows a ${fiveMinCandle.type.lowercase().replace("_", " ")} — sellers are taking over."
+                else ->
+                    "The last 5-min candle is a Doji — price is undecided right now."
+            }
+            stock.aboveVwap -> "Price is above the day's average (VWAP) — buyers are in control."
+            else            -> "Price is below the day's average (VWAP) — sellers have the upper hand."
+        }
+        val headline = "${stock.name} is at ${fmt(ltp)}. $patternDesc"
+
+        // ── ACTION ────────────────────────────────────────────────────────────
+        val isBullish = stock.optionAction in listOf("STRONG BUY", "POSSIBLE BUY") &&
+                        (fiveMinCandle?.signal != TechnicalIndicators.CandleSignal.BEARISH) &&
+                        stock.aboveVwap
+        val isBearish = stock.optionAction == "AVOID" ||
+                        fiveMinCandle?.signal == TechnicalIndicators.CandleSignal.BEARISH
+
+        val entryPrice  = if (isBullish) ltp + atr * 0.1 else ltp - atr * 0.1
+        val targetPrice = if (isBullish) ltp + atr * 1.2 else ltp - atr * 1.2
+        val stopPrice   = if (isBullish) ltp - atr * 0.6 else ltp + atr * 0.6
+
+        val targetPct   = (targetPrice - entryPrice) / entryPrice * 100
+        val stopPct     = kotlin.math.abs(entryPrice - stopPrice) / entryPrice * 100
+
+        val action = when {
+            isBullish -> "Buy above ${fmt(entryPrice)}"
+            isBearish -> "Avoid buying — wait for the selling to stop first"
+            else      -> "Wait — no clear signal yet. Watch if price crosses ${fmt(ltp + atr * 0.15)}"
+        }
+        val target   = if (isBullish) "Target: ${fmt(targetPrice)} (+${pct(targetPct)}%)"   else "—"
+        val stopLoss = if (isBullish) "Stop Loss: ${fmt(stopPrice)} (-${pct(stopPct)}%)" else "—"
+
+        // ── WHY ───────────────────────────────────────────────────────────────
+        val rsiDesc = when {
+            stock.rsi > 70  -> "RSI is high (${stock.rsi.toInt()}) — stock may be overbought, keep targets tight."
+            stock.rsi < 35  -> "RSI is low (${stock.rsi.toInt()}) — stock is oversold, could bounce."
+            stock.rsi in 45.0..65.0 -> "RSI is in the sweet spot (${stock.rsi.toInt()}) — good momentum."
+            else            -> "RSI is at ${stock.rsi.toInt()} — neutral zone."
+        }
+        val volumeDesc = if (stock.volumeSpike) "Volume spiked — big players are active." else "Volume is normal."
+        val pivotDesc  = when {
+            pivots != null && ltp > pivots.r1  -> "Price is above R1 resistance (${fmt(pivots.r1)}) — momentum is strong."
+            pivots != null && ltp < pivots.s1  -> "Price is below S1 support (${fmt(pivots.s1)}) — weak zone."
+            pivots != null && ltp > pivots.cpp -> "Price is above the central pivot (${fmt(pivots.cpp)}) — mild bullish."
+            pivots != null                     -> "Price is below the central pivot (${fmt(pivots.cpp)}) — mild bearish."
+            else -> ""
+        }
+        val orbDesc = when {
+            stock.orbHigh > 0 && ltp > stock.orbHigh -> "Price broke above the morning range (ORB: ${fmt(stock.orbHigh)}) — strong signal."
+            stock.orbLow  > 0 && ltp < stock.orbLow  -> "Price fell below the morning range (ORB: ${fmt(stock.orbLow)}) — bearish signal."
+            else -> ""
+        }
+
+        val why = buildString {
+            append(rsiDesc); append(" "); append(volumeDesc)
+            if (orbDesc.isNotEmpty())   { append(" "); append(orbDesc) }
+            if (pivotDesc.isNotEmpty()) { append(" "); append(pivotDesc) }
+        }.trim()
+
+        // ── WARNING ───────────────────────────────────────────────────────────
+        val warning = when {
+            stock.rsi > 68  -> "RSI is near overbought — keep your stop loss tight, don't chase."
+            stock.rsi < 32  -> "RSI is near oversold — wait for a bounce confirmation before buying."
+            !stock.aboveVwap && isBullish -> "Price is below VWAP — only buy if it crosses VWAP first."
+            else -> "Exit immediately if price closes below ${fmt(if (isBullish) stopPrice else ltp - atr)} on a 5-min candle."
+        }
+
+        // ── CONFIDENCE (session-adjusted) ────────────────────────────────────
+        val adjustedConf = when (stock.sessionPhase) {
+            "MIDDAY"    -> (stock.score * 0.82).toInt().coerceIn(0, 100)
+            "AFTERNOON" -> (stock.score * 0.90).toInt().coerceIn(0, 100)
+            else        -> stock.score.toInt().coerceIn(0, 100)
+        }
+
+        // ── SESSION NOTE ──────────────────────────────────────────────────────
+        val sessionNote = when (stock.sessionPhase) {
+            "MORNING"   -> "Best time to trade. Morning momentum is strongest."
+            "MIDDAY"    -> "Midday — momentum slows down. Keep targets tight and avoid new trades."
+            "AFTERNOON" -> "Late session — only ride existing trends. Don't start fresh trades."
+            else        -> "Market is closed. This analysis is based on the last trading session."
+        }
+
+        // ── 5-MIN SUMMARY ─────────────────────────────────────────────────────
+        val stDesc = when (supertrendSignal) { "BUY" -> " Supertrend: BUY." "SELL" -> " Supertrend: SELL." else -> "" }
+        val fiveMinSummary = buildString {
+            append("Last 5-min: ")
+            if (fiveMinCandle != null && fiveMinCandle.type != "NONE") append("${fiveMinCandle.label}. ")
+            append(if (stock.aboveVwap) "Above VWAP — momentum UP." else "Below VWAP — momentum DOWN.")
+            append(stDesc)
+        }
+
+        return QuickTake(
+            headline      = headline,
+            action        = action,
+            target        = target,
+            stopLoss      = stopLoss,
+            why           = why,
+            warning       = warning,
+            confidence    = adjustedConf,
+            sessionPhase  = stock.sessionPhase,
+            sessionNote   = sessionNote,
+            fiveMinSummary = fiveMinSummary,
+        )
     }
 }

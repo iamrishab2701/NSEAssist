@@ -23,6 +23,7 @@ import com.nseassist.data.model.AiProvider
 import com.nseassist.data.model.AiSettings
 import com.nseassist.data.model.NewsSentiment
 import com.nseassist.data.model.NewsResult
+import com.nseassist.data.model.QuickTake
 import com.nseassist.data.model.SingleStockAiAnalysis
 import com.nseassist.data.model.StockData
 import com.nseassist.ui.theme.*
@@ -455,6 +456,9 @@ private fun StockDetailContent(stock: StockData, newsState: UiState<NewsResult?>
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
+        // Quick Take — plain English summary (shown only when 5-min data is available)
+        stock.quickTake?.let { QuickTakeCard(it) }
+
         // Price header
         Card(colors = CardDefaults.cardColors(containerColor = CardDark)) {
             Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -759,4 +763,193 @@ private fun newsColor(sentiment: NewsSentiment) = when (sentiment) {
     NewsSentiment.NEGATIVE -> RedBear
     NewsSentiment.NEUTRAL  -> AmberWarn
     NewsSentiment.NONE     -> TextSecondary
+}
+
+// ── Quick Take Card ────────────────────────────────────────────────────────────
+//
+// Plain-English summary card shown at the very top of the stock detail screen.
+// Designed for beginners — no jargon, just: what's happening, what to do, why.
+
+@Composable
+private fun QuickTakeCard(qt: QuickTake) {
+    val sessionColor = when (qt.sessionPhase) {
+        "MORNING"   -> GreenBull
+        "MIDDAY"    -> AmberWarn
+        "AFTERNOON" -> AmberWarn
+        else        -> TextSecondary
+    }
+    val sessionIcon = when (qt.sessionPhase) {
+        "MORNING"   -> "🌅"
+        "MIDDAY"    -> "☀️"
+        "AFTERNOON" -> "🌆"
+        else        -> "🌙"
+    }
+    val confColor = when {
+        qt.confidence >= 70 -> GreenBull
+        qt.confidence >= 50 -> AmberWarn
+        else                -> RedBear
+    }
+    val isBuy = qt.action.startsWith("Buy")
+
+    Card(
+        colors = CardDefaults.cardColors(
+            containerColor = if (isBuy) GreenBull.copy(alpha = 0.07f) else RedBear.copy(alpha = 0.07f),
+        ),
+        shape = RoundedCornerShape(14.dp),
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            // Header
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    "Quick Take",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 15.sp,
+                    color = TextPrimary,
+                )
+                Surface(
+                    shape = RoundedCornerShape(20.dp),
+                    color = sessionColor.copy(alpha = 0.15f),
+                ) {
+                    Text(
+                        "$sessionIcon  ${qt.sessionPhase}",
+                        color = sessionColor,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                    )
+                }
+            }
+
+            // Situation headline
+            Text(
+                qt.headline,
+                color = TextPrimary,
+                fontSize = 13.sp,
+                lineHeight = 20.sp,
+            )
+
+            // 5-min signal summary
+            if (qt.fiveMinSummary.isNotBlank()) {
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = CardDark,
+                ) {
+                    Text(
+                        qt.fiveMinSummary,
+                        color = TextSecondary,
+                        fontSize = 12.sp,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                    )
+                }
+            }
+
+            HorizontalDivider(color = DividerColor, thickness = 0.5.dp)
+
+            // Action + Target + Stop Loss
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                // Action
+                Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = if (isBuy) GreenBull.copy(alpha = 0.15f) else RedBear.copy(alpha = 0.12f),
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Text("Action", color = TextSecondary, fontSize = 10.sp)
+                        Text(
+                            qt.action,
+                            color = if (isBuy) GreenBull else RedBear,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 13.sp,
+                            lineHeight = 18.sp,
+                        )
+                    }
+                }
+            }
+
+            if (qt.target != "—") {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Surface(
+                        shape = RoundedCornerShape(10.dp),
+                        color = GreenBull.copy(alpha = 0.10f),
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            Text("🎯  Target", color = TextSecondary, fontSize = 10.sp)
+                            Text(qt.target, color = GreenBull, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                        }
+                    }
+                    Surface(
+                        shape = RoundedCornerShape(10.dp),
+                        color = RedBear.copy(alpha = 0.10f),
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            Text("🛑  Stop Loss", color = TextSecondary, fontSize = 10.sp)
+                            Text(qt.stopLoss, color = RedBear, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                        }
+                    }
+                }
+            }
+
+            HorizontalDivider(color = DividerColor, thickness = 0.5.dp)
+
+            // Why
+            Text(
+                "Why: ${qt.why}",
+                color = TextSecondary,
+                fontSize = 12.sp,
+                lineHeight = 19.sp,
+            )
+
+            // Warning
+            Surface(
+                shape = RoundedCornerShape(8.dp),
+                color = AmberWarn.copy(alpha = 0.08f),
+            ) {
+                Text(
+                    "⚠  ${qt.warning}",
+                    color = AmberWarn,
+                    fontSize = 12.sp,
+                    lineHeight = 18.sp,
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                )
+            }
+
+            // Confidence + session note
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    qt.sessionNote,
+                    color = sessionColor,
+                    fontSize = 11.sp,
+                    modifier = Modifier.weight(1f),
+                )
+                Surface(
+                    shape = RoundedCornerShape(20.dp),
+                    color = confColor.copy(alpha = 0.15f),
+                ) {
+                    Text(
+                        "Confidence: ${qt.confidence}%",
+                        color = confColor,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                    )
+                }
+            }
+        }
+    }
 }

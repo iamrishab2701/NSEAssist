@@ -240,6 +240,65 @@ object YahooFinanceClient {
         val industry: String = "",
     )
 
+    data class IntradayBar(
+        val time:   Long,
+        val open:   Double,
+        val high:   Double,
+        val low:    Double,
+        val close:  Double,
+        val volume: Long,
+    )
+
+    data class IntradayData(
+        val candles:  List<IntradayBar>,
+        val orbHigh:  Double,
+        val orbLow:   Double,
+        val pivotCpp: Double,
+        val pivotR1:  Double,
+        val pivotR2:  Double,
+        val pivotS1:  Double,
+        val pivotS2:  Double,
+    )
+
+    /**
+     * Fetches today's 5-min candles + ORB + pivot points via the Worker /intraday endpoint.
+     * Returns null on any error — 5-min data is optional; deep analysis still works without it.
+     */
+    suspend fun get5MinData(symbol: String): IntradayData? {
+        if (!useWorker) return null
+        val url = "$WORKER_URL/intraday?symbol=${URLEncoder.encode(symbol, "UTF-8")}"
+        Log.d(TAG, "→ [worker] intraday $symbol")
+        return runCatching {
+            val body = executeWith(workerClient, url) ?: return null
+            val json = JsonParser.parseReader(JsonReader(StringReader(body))).asJsonObject
+            val candleArr = json.getAsJsonArray("candles") ?: return null
+            val candles = candleArr.map { el ->
+                val obj = el.asJsonObject
+                IntradayBar(
+                    time   = obj.get("time")?.asLong   ?: 0L,
+                    open   = obj.get("open")?.asDouble  ?: 0.0,
+                    high   = obj.get("high")?.asDouble  ?: 0.0,
+                    low    = obj.get("low")?.asDouble   ?: 0.0,
+                    close  = obj.get("close")?.asDouble ?: 0.0,
+                    volume = obj.get("volume")?.asLong  ?: 0L,
+                )
+            }.filter { it.open > 0 && it.high > 0 && it.low > 0 && it.close > 0 }
+            IntradayData(
+                candles  = candles,
+                orbHigh  = json.get("orbHigh")?.asDouble  ?: 0.0,
+                orbLow   = json.get("orbLow")?.asDouble   ?: 0.0,
+                pivotCpp = json.get("pivotCpp")?.asDouble ?: 0.0,
+                pivotR1  = json.get("pivotR1")?.asDouble  ?: 0.0,
+                pivotR2  = json.get("pivotR2")?.asDouble  ?: 0.0,
+                pivotS1  = json.get("pivotS1")?.asDouble  ?: 0.0,
+                pivotS2  = json.get("pivotS2")?.asDouble  ?: 0.0,
+            )
+        }.getOrElse {
+            Log.w(TAG, "5-min data error for $symbol: ${it.message}")
+            null
+        }
+    }
+
     /**
      * Fetch quotes for up to 20 symbols in a single HTTP request.
      * When [WORKER_URL] is set, calls the Cloudflare Worker (no auth needed).

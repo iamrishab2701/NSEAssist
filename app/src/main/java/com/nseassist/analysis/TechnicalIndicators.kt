@@ -264,6 +264,75 @@ class TechnicalIndicators {
         }
     }
 
+    // ── Pivot Points (Standard) ───────────────────────────────────────────────
+    fun pivotPoints(prevHigh: Double, prevLow: Double, prevClose: Double): PivotPoints {
+        val cpp = (prevHigh + prevLow + prevClose) / 3.0
+        return PivotPoints(
+            cpp = cpp,
+            r1  = 2 * cpp - prevLow,
+            r2  = cpp + (prevHigh - prevLow),
+            s1  = 2 * cpp - prevHigh,
+            s2  = cpp - (prevHigh - prevLow),
+        )
+    }
+
+    // ── Supertrend (period=7, multiplier=3.0) ────────────────────────────────
+    // Returns BUY when price is above the lower band, SELL when below upper band.
+    fun supertrend(
+        highs: List<Double>,
+        lows: List<Double>,
+        closes: List<Double>,
+        period: Int = 7,
+        multiplier: Double = 3.0,
+    ): SupertrendResult {
+        val size = minOf(highs.size, lows.size, closes.size)
+        if (size < period + 2) return SupertrendResult("NEUTRAL", closes.lastOrNull() ?: 0.0)
+
+        // Wilder-smoothed ATR
+        val tr = (1 until size).map { i ->
+            maxOf(highs[i] - lows[i], abs(highs[i] - closes[i - 1]), abs(lows[i] - closes[i - 1]))
+        }
+        val atrList = mutableListOf(tr.take(period).average())
+        for (i in period until tr.size) {
+            atrList.add((atrList.last() * (period - 1) + tr[i]) / period)
+        }
+
+        // Build Supertrend bands
+        val start = period
+        val finalUpper = mutableListOf<Double>()
+        val finalLower = mutableListOf<Double>()
+        val supertrendLine = mutableListOf<Double>()
+        val directionUp    = mutableListOf<Boolean>()
+
+        for (i in atrList.indices) {
+            val idx  = i + start
+            if (idx >= size) break
+            val hl2  = (highs[idx] + lows[idx]) / 2.0
+            val bu   = hl2 + multiplier * atrList[i]
+            val bl   = hl2 - multiplier * atrList[i]
+
+            val fu = if (i > 0 && bu < finalUpper.last()) bu
+                     else if (i > 0 && closes[idx - 1] > finalUpper.last()) bu
+                     else if (i > 0) finalUpper.last() else bu
+            val fl = if (i > 0 && bl > finalLower.last()) bl
+                     else if (i > 0 && closes[idx - 1] < finalLower.last()) bl
+                     else if (i > 0) finalLower.last() else bl
+            finalUpper.add(fu); finalLower.add(fl)
+
+            val up = if (i == 0) true
+                     else if (supertrendLine.last() == finalUpper[i - 1]) closes[idx] > fu
+                     else closes[idx] >= fl
+            directionUp.add(up)
+            supertrendLine.add(if (up) fl else fu)
+        }
+
+        val isUp = directionUp.lastOrNull() ?: true
+        return SupertrendResult(
+            signal = if (isUp) "BUY" else "SELL",
+            band   = supertrendLine.lastOrNull() ?: closes.last(),
+        )
+    }
+
     data class BollingerBands(val upper: Double, val middle: Double, val lower: Double)
 
     data class AdxResult(val adx: Double, val diPlus: Double, val diMinus: Double) {
@@ -282,5 +351,18 @@ class TechnicalIndicators {
         val low: Double,
         val direction: String,
         val confidence: Int,
+    )
+
+    data class PivotPoints(
+        val cpp: Double,
+        val r1: Double,
+        val r2: Double,
+        val s1: Double,
+        val s2: Double,
+    )
+
+    data class SupertrendResult(
+        val signal: String,  // "BUY" / "SELL" / "NEUTRAL"
+        val band: Double,    // support band if BUY, resistance band if SELL
     )
 }

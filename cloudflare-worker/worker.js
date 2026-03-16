@@ -41,6 +41,10 @@ let _trendsBody = null;
 let _trendsTs   = 0;
 const TRENDS_TTL = 15 * 60 * 1000;
 
+// ── Intraday 5-min cache (per symbol) ─────────────────────────────────────────
+const _intradayCache = new Map();   // symbol → { body: string, ts: number }
+const INTRADAY_TTL   = 5 * 60 * 1000;  // 5 minutes
+
 // ── Indian sector map cache ───────────────────────────────────────────────────
 let _indSectors   = null; // Map<sector, ImpactedStock[]>
 let _indSectorsTs = 0;
@@ -1065,6 +1069,111 @@ async function handleGlobalTrends() {
   return new Response(_trendsBody, { headers: { ...corsHeaders(), "X-Cache": "MISS" } });
 }
 
+// ── Intraday 5-min candles ────────────────────────────────────────────────────
+//
+// Returns today's 5-min OHLCV bars for a symbol plus:
+//   orbHigh / orbLow  — Opening Range (first 2 candles: 9:15–9:25 AM)
+//   pivotCpp / pivotR1 / pivotS1 — Daily pivot points from yesterday's data
+//
+// Uses Yahoo v8/chart which works without a crumb.
+// Cached per symbol for 5 minutes.
+
+async function handleIntraday(searchParams) {
+  const symbol = (searchParams.get("symbol") ?? "").trim();
+  if (!symbol) return new Response(JSON.stringify({ error: "symbol required" }), { status: 400, headers: corsHeaders() });
+
+  const now    = Date.now();
+  const cached = _intradayCache.get(symbol);
+  if (cached && (now - cached.ts) < INTRADAY_TTL) {
+    return new Response(cached.body, { headers: { ...corsHeaders(), "Content-Type": "application/json", "X-Cache": "HIT" } });
+  }
+
+  // Fetch today's 5-min bars + 5-day daily (for pivot calculation)
+  // Uses v8/chart which works without crumb from Cloudflare datacenters
+  async function chartFetch(url) {
+    for (const base of [YAHOO1, YAHOO2]) {
+      try {
+        const resp = await fetch(url.replace(YAHOO1, base), { headers: yahooHeaders(_cookies) });
+        if (resp.ok) return await resp.text();
+      } catch (_) {}
+    }
+    return null;
+  }
+
+  const [intraDayRaw, dailyRaw] = await Promise.all([
+    chartFetch(`${YAHOO1}/v8/finance/chart/${enc(symbol)}?interval=5m&range=1d`),
+    chartFetch(`${YAHOO1}/v8/finance/chart/${enc(symbol)}?interval=1d&range=5d`),
+  ]);
+
+  // Parse 5-min candles
+  let candles = [];
+  let orbHigh = 0, orbLow = 0;
+  if (intraDayRaw) {
+    try {
+      const json  = JSON.parse(intraDayRaw);
+      const chart = json?.chart?.result?.[0];
+      if (chart) {
+        const ts  = chart.timestamp ?? [];
+        const q   = chart.indicators?.quote?.[0] ?? {};
+        candles = ts.map((t, i) => ({
+          time:   t,
+          open:   q.open?.[i]   ?? null,
+          high:   q.high?.[i]   ?? null,
+          low:    q.low?.[i]    ?? null,
+          close:  q.close?.[i]  ?? null,
+          volume: q.volume?.[i] ?? null,
+        })).filter(c => c.open != null && c.high != null && c.low != null && c.close != null);
+
+        // ORB = first 2 candles (9:15 + 9:20 = opening range)
+        const orb = candles.slice(0, 2);
+        orbHigh = orb.length ? Math.max(...orb.map(c => c.high)) : 0;
+        orbLow  = orb.length ? Math.min(...orb.map(c => c.low))  : 0;
+      }
+    } catch (_) {}
+  }
+
+  // Parse pivot points from yesterday's daily candle
+  let pivotCpp = 0, pivotR1 = 0, pivotR2 = 0, pivotS1 = 0, pivotS2 = 0;
+  if (dailyRaw) {
+    try {
+      const json  = JSON.parse(dailyRaw);
+      const chart = json?.chart?.result?.[0];
+      if (chart) {
+        const q    = chart.indicators?.quote?.[0] ?? {};
+        const bars = (chart.timestamp ?? []).length;
+        if (bars >= 2) {
+          // Use second-to-last bar as "yesterday"
+          const prevIdx = bars - 2;
+          const pH = q.high?.[prevIdx]  ?? 0;
+          const pL = q.low?.[prevIdx]   ?? 0;
+          const pC = q.close?.[prevIdx] ?? 0;
+          if (pH && pL && pC) {
+            pivotCpp = (pH + pL + pC) / 3;
+            pivotR1  = 2 * pivotCpp - pL;
+            pivotR2  = pivotCpp + (pH - pL);
+            pivotS1  = 2 * pivotCpp - pH;
+            pivotS2  = pivotCpp - (pH - pL);
+          }
+        }
+      }
+    } catch (_) {}
+  }
+
+  const body = JSON.stringify({
+    candles,
+    orbHigh:  Math.round(orbHigh  * 100) / 100,
+    orbLow:   Math.round(orbLow   * 100) / 100,
+    pivotCpp: Math.round(pivotCpp * 100) / 100,
+    pivotR1:  Math.round(pivotR1  * 100) / 100,
+    pivotR2:  Math.round(pivotR2  * 100) / 100,
+    pivotS1:  Math.round(pivotS1  * 100) / 100,
+    pivotS2:  Math.round(pivotS2  * 100) / 100,
+  });
+
+  _intradayCache.set(symbol, { body, ts: now });
+  return new Response(body, { headers: { ...corsHeaders(), "Content-Type": "application/json", "X-Cache": "MISS" } });
+}
+
 // ── Main entry point ──────────────────────────────────────────────────────────
 
 export default {
@@ -1087,6 +1196,7 @@ export default {
       if (pathname === "/profile")  return handleProfile(searchParams);
       if (pathname === "/news")          return handleNews(searchParams);
       if (pathname === "/global-trends") return handleGlobalTrends();
+      if (pathname === "/intraday")      return handleIntraday(searchParams);
       return jsonError(`Unknown endpoint: ${pathname}`, 404);
     } catch (e) {
       return jsonError(e.message, 500);
