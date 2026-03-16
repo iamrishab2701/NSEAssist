@@ -6,6 +6,7 @@ data class GlobalTrendsData(
     val india: List<GlobalIndexItem>,
     val commodities: List<GlobalIndexItem>,
     val forex: List<GlobalIndexItem>,
+    val adrs: List<GlobalIndexItem>,       // Indian ADRs on NYSE/NASDAQ — direct pre-market signals
     val impacts: List<ImpactCard>,
     val overallBias: String,   // "BULLISH" | "BEARISH" | "NEUTRAL"
     val cachedAt: Long,
@@ -23,11 +24,12 @@ data class ImpactCard(
     val foreignSymbol: String,
     val foreignName: String,
     val foreignChangePct: Double,
-    val direction: String,         // "UP" | "DOWN"
+    val direction: String,               // "UP" | "DOWN"
     val sector: String,
-    val impactDirection: String,   // "POSITIVE" | "NEGATIVE"
+    val impactDirection: String,         // "POSITIVE" | "NEGATIVE"
     val indianStocks: List<ImpactedStock>,
     val newsHeadlines: List<String>,
+    val correlationStrength: String,     // "STRONG" | "MODERATE" | "WEAK"
 )
 
 data class ImpactedStock(

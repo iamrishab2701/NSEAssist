@@ -18,6 +18,7 @@ import com.nseassist.ui.screens.AboutAppScreen
 import com.nseassist.ui.screens.AiReportScreen
 import com.nseassist.ui.screens.HomeScreen
 import com.nseassist.ui.screens.ModelConfigScreen
+import com.nseassist.ui.screens.PerformanceScreen
 import com.nseassist.ui.screens.ScanScreen
 import com.nseassist.ui.screens.StockDetailScreen
 import com.nseassist.ui.theme.NSEAssistTheme
@@ -65,6 +66,9 @@ fun AppNavHost(navController: NavHostController, vm: MainViewModel) {
         }
         composable("settings/about") {
             AboutAppScreen(navController)
+        }
+        composable("performance") {
+            PerformanceScreen(navController, vm)
         }
     }
 }

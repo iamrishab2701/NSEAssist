@@ -3,6 +3,7 @@ package com.nseassist.data.ai
 import com.google.gson.Gson
 import com.google.gson.JsonObject
 import com.google.gson.JsonParser
+import com.nseassist.data.api.MemoryClient
 import com.nseassist.data.model.AiAnalysisReport
 import com.nseassist.data.model.AiProvider
 import com.nseassist.data.model.AiProviderConfig
@@ -10,9 +11,15 @@ import com.nseassist.data.model.AiRecommendedStock
 import com.nseassist.data.model.AiStockAllocation
 import com.nseassist.data.model.AiTradeDirection
 import com.nseassist.data.model.NewsResult
+import com.nseassist.data.model.PaperTradeRequest
 import com.nseassist.data.model.ScanCategory
 import com.nseassist.data.model.SingleStockAiAnalysis
+import com.nseassist.data.model.StockAiContext
 import com.nseassist.data.model.StockData
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.launch
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -43,9 +50,45 @@ class AiAnalysisService {
         require(config.apiKey.isNotBlank()) { "API key missing for ${config.provider.label}" }
         require(stocks.isNotEmpty()) { "No stocks available for AI analysis" }
 
-        val prompt = buildBatchPrompt(capital, category, stocks)
+        // Fetch historical context for top 5 candidates in parallel (4 s timeout each)
+        val topSymbols = stocks.sortedByDescending { it.score }.take(5).map { it.symbol }
+        val contextMap: Map<String, StockAiContext> = coroutineScope {
+            topSymbols.map { sym ->
+                async { sym to MemoryClient.getAiContext(sym) }
+            }.awaitAll().associate { (sym, ctx) ->
+                sym to (ctx ?: StockAiContext(sym, hasData = false))
+            }
+        }
+
+        val prompt = buildBatchPrompt(capital, category, stocks, contextMap)
         val rawResponse = callProvider(config, SYSTEM_PROMPT, prompt)
-        parseReport(rawResponse, config)
+        val report = parseReport(rawResponse, config)
+
+        // Auto-log primary pick recommendation (fire-and-forget)
+        launch {
+            val pick = report.primaryPick
+            if (pick.direction != AiTradeDirection.NO_TRADE) {
+                runCatching {
+                    MemoryClient.logPaperTrade(PaperTradeRequest(
+                        symbol       = pick.symbol,
+                        companyName  = pick.companyName,
+                        direction    = pick.direction.name,
+                        entryPrice   = 0.0,       // not available in batch analysis
+                        targetText   = pick.target,
+                        stopLossText = pick.stopLoss,
+                        quantity     = 0,
+                        sessionPhase = "",
+                        aiProvider   = config.provider.label,
+                        confidence   = pick.confidence,
+                        verdict      = "AI_BATCH",
+                        rrRatio      = "",
+                        reason       = pick.rationale.take(200),
+                    ))
+                }
+            }
+        }
+
+        report
     } }
 
     // ── Single-stock deep-dive (Stock Detail screen FAB) ──────────────────────────
@@ -58,9 +101,37 @@ class AiAnalysisService {
     ): Result<SingleStockAiAnalysis> = withContext(Dispatchers.IO) { runCatching {
         require(config.apiKey.isNotBlank()) { "API key missing for ${config.provider.label}" }
 
-        val prompt = buildSingleStockPrompt(capital, stock, news)
+        // Fetch historical context for this stock (4 s timeout, non-blocking on failure)
+        val context = MemoryClient.getAiContext(stock.symbol)
+
+        val prompt = buildSingleStockPrompt(capital, stock, news, context)
         val rawResponse = callProvider(config, SINGLE_STOCK_SYSTEM_PROMPT, prompt)
-        parseSingleStockReport(rawResponse, config)
+        val result = parseSingleStockReport(rawResponse, config)
+
+        // Auto-log recommendation (fire-and-forget)
+        launch {
+            if (result.verdict == "GO") {
+                runCatching {
+                    MemoryClient.logPaperTrade(PaperTradeRequest(
+                        symbol       = stock.symbol,
+                        companyName  = stock.name,
+                        direction    = result.direction,
+                        entryPrice   = stock.ltp,
+                        targetText   = result.target,
+                        stopLossText = result.stopLoss,
+                        quantity     = result.quantity,
+                        sessionPhase = stock.sessionPhase,
+                        aiProvider   = config.provider.label,
+                        confidence   = result.confidence,
+                        verdict      = result.verdict,
+                        rrRatio      = result.rrRatio,
+                        reason       = result.reason.take(200),
+                    ))
+                }
+            }
+        }
+
+        result
     } }
 
     // ── Provider router ────────────────────────────────────────────────────────────
@@ -287,7 +358,12 @@ class AiAnalysisService {
 
     // ── Prompt builders ────────────────────────────────────────────────────────────
 
-    private fun buildSingleStockPrompt(capital: Double, stock: StockData, news: NewsResult?): String {
+    private fun buildSingleStockPrompt(
+        capital: Double,
+        stock: StockData,
+        news: NewsResult?,
+        context: StockAiContext? = null,
+    ): String {
         val qty     = if (stock.ltp > 0) kotlin.math.floor(capital / stock.ltp).toInt() else 0
         val maxLoss = capital * 0.02
 
@@ -458,6 +534,27 @@ class AiAnalysisService {
             }
             appendLine()
 
+            // Historical performance context — injected when sufficient data exists
+            if (context != null && context.hasData && context.signalCount >= 3) {
+                appendLine("--- HISTORICAL PERFORMANCE CONTEXT (${stock.symbol}, last 30 days) ---")
+                appendLine("Signal Occurrences : ${context.signalCount}  (signals that fired)")
+                appendLine("Win Rate           : ${"%.0f".format(context.signalWinRate * 100)}%  (${context.winCount}/${context.signalCount} hit target)")
+                if (context.bestSession.isNotBlank())
+                    appendLine("Best Session Phase : ${context.bestSession}  (highest historical win rate)")
+                if (context.predictionCount >= 5)
+                    appendLine("Prediction Accuracy: ${"%.0f".format(context.predictionAccuracy * 100)}%  (direction correct out of ${context.predictionCount} days)")
+                if (context.recentTrades.isNotEmpty()) {
+                    appendLine("Recent AI Calls    :")
+                    context.recentTrades.forEach { t ->
+                        appendLine("  ${t.verdict} ${t.direction} confidence=${t.confidence} → outcome=${t.outcome}")
+                    }
+                }
+                appendLine("NOTE: Adjust your confidence to be consistent with the historical win rate above.")
+                if (context.signalWinRate < 0.45)
+                    appendLine("WARNING: Historical win rate is below 45% for this stock — apply extra caution.")
+                appendLine()
+            }
+
             news?.let { n ->
                 appendLine("--- LIVE NEWS (Last 24h) ---")
                 appendLine("Overall Sentiment : ${n.sentiment.name}")
@@ -475,7 +572,12 @@ class AiAnalysisService {
         }.trimEnd()
     }
 
-    private fun buildBatchPrompt(capital: Double, category: ScanCategory, stocks: List<StockData>): String {
+    private fun buildBatchPrompt(
+        capital: Double,
+        category: ScanCategory,
+        stocks: List<StockData>,
+        contextMap: Map<String, StockAiContext> = emptyMap(),
+    ): String {
         val stockLines = stocks.joinToString("\n") { stock ->
             buildString {
                 append("- ${stock.symbol}")
@@ -555,6 +657,27 @@ class AiAnalysisService {
                 append(" | maxQty=${if (stock.ltp > 0) kotlin.math.floor(capital / stock.ltp).toInt() else 0}")
             }
         }
+        // Inject historical context for top candidates (only if data exists)
+        val contextBlock = buildString {
+            val richContext = contextMap.values.filter { it.hasData && it.signalCount >= 3 }
+            if (richContext.isNotEmpty()) {
+                appendLine()
+                appendLine("--- HISTORICAL PERFORMANCE CONTEXT (last 30 days) ---")
+                richContext.forEach { ctx ->
+                    append("${ctx.symbol}: signals=${ctx.signalCount}")
+                    append(", winRate=${"%.0f".format(ctx.signalWinRate * 100)}%")
+                    if (ctx.bestSession.isNotBlank()) append(", bestSession=${ctx.bestSession}")
+                    if (ctx.predictionCount >= 5) append(", predictionAccuracy=${"%.0f".format(ctx.predictionAccuracy * 100)}%")
+                    if (ctx.recentTrades.isNotEmpty()) {
+                        val recent = ctx.recentTrades.take(3)
+                        append(", recentTrades=[${recent.joinToString { "${it.verdict}(${it.outcome})" }}]")
+                    }
+                    appendLine()
+                }
+                appendLine("Use this historical data to calibrate your confidence. Higher win rates validate current signals; low win rates should reduce confidence.")
+            }
+        }
+
         return """
             Capital: Rs ${"%.2f".format(capital)}
             Category: ${category.label}
@@ -568,6 +691,7 @@ class AiAnalysisService {
 
             Stocks:
             $stockLines
+            $contextBlock
         """.trimIndent()
     }
 

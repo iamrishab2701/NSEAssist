@@ -418,6 +418,11 @@ private fun AiSettingsTab(
 
         // ── Navigation rows ───────────────────────────────────────────────────
         SettingsMenuRow(
+            title = "Performance",
+            subtitle = "Paper trades, signal replay history and AI audit",
+            onClick = { onNavigate("performance") },
+        )
+        SettingsMenuRow(
             title = "Model Configuration",
             subtitle = "Add or update your AI provider API keys",
             onClick = { onNavigate("settings/model-config") },

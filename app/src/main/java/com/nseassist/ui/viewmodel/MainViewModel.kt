@@ -4,15 +4,19 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.nseassist.NSEAssistApp
+import com.nseassist.analysis.SignalReplay
+import com.nseassist.data.api.GlobalTrendsClient
+import com.nseassist.data.api.MemoryClient
 import com.nseassist.data.local.ThemeMode
 import com.nseassist.data.model.AiAnalysisReport
 import com.nseassist.data.model.AiProvider
 import com.nseassist.data.model.AiProviderConfig
 import com.nseassist.data.model.AiSettings
-import com.nseassist.data.api.GlobalTrendsClient
 import com.nseassist.data.model.GlobalTrendsData
 import com.nseassist.data.model.MarketOverview
 import com.nseassist.data.model.NewsResult
+import com.nseassist.data.model.PaperTradeEntry
+import com.nseassist.data.model.PaperTradeRequest
 import com.nseassist.data.model.ScanCategory
 import com.nseassist.data.model.SingleStockAiAnalysis
 import com.nseassist.data.model.StockData
@@ -399,6 +403,77 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun clearExportState() {
         _exportState.value = ExportState.Idle
+    }
+
+    // ── Paper Trade Log ───────────────────────────────────────────────────────
+
+    private val _trades = MutableStateFlow<UiState<List<PaperTradeEntry>>>(UiState.Loading)
+    val trades: StateFlow<UiState<List<PaperTradeEntry>>> = _trades
+
+    /** Log a paper trade to Cloudflare D1 (fire-and-forget). */
+    fun logPaperTrade(trade: PaperTradeRequest) {
+        viewModelScope.launch {
+            MemoryClient.logPaperTrade(trade)
+        }
+    }
+
+    /** Load all logged trades from Cloudflare D1. */
+    fun loadTrades() {
+        viewModelScope.launch {
+            _trades.value = UiState.Loading
+            val list = MemoryClient.getTrades()
+            _trades.value = UiState.Success(list)
+        }
+    }
+
+    /** Update the outcome of a logged trade (e.g. TARGET_HIT / SL_HIT). */
+    fun updateTradeOutcome(id: Int, outcome: String, outcomePrice: Double?) {
+        viewModelScope.launch {
+            MemoryClient.updateTradeOutcome(id, outcome, outcomePrice)
+            loadTrades()   // refresh list
+        }
+    }
+
+    /** Trigger manual 6-month data cleanup. */
+    fun triggerMemoryCleanup() {
+        viewModelScope.launch {
+            MemoryClient.triggerCleanup()
+        }
+    }
+
+    // ── Signal Replay ─────────────────────────────────────────────────────────
+
+    private val _signalReplay = MutableStateFlow<UiState<SignalReplay.SignalReplayResult>?>(null)
+    val signalReplay: StateFlow<UiState<SignalReplay.SignalReplayResult>?> = _signalReplay
+
+    /**
+     * Run signal replay on the stock's existing price/volume history.
+     * Only works on deep-enriched stocks (priceHistory non-empty).
+     * Logs outcomes to D1 automatically after completion.
+     */
+    fun runSignalReplay(stock: StockData) {
+        if (stock.priceHistory.isEmpty()) {
+            _signalReplay.value = UiState.Error("Deep analysis required — open stock detail first")
+            return
+        }
+        viewModelScope.launch {
+            _signalReplay.value = UiState.Loading
+            val result = SignalReplay().replay(
+                symbol  = stock.symbol,
+                closes  = stock.priceHistory,
+                volumes = stock.volumeHistory.map { it.toDouble() },
+                atr     = stock.atr,
+            )
+            _signalReplay.value = UiState.Success(result)
+            // Log signal outcomes to D1 (fire-and-forget)
+            if (result.toSignalOutcomes.isNotEmpty()) {
+                launch { MemoryClient.logSignalOutcomes(result.toSignalOutcomes) }
+            }
+        }
+    }
+
+    fun clearSignalReplay() {
+        _signalReplay.value = null
     }
 
     fun setThemeMode(mode: ThemeMode) {

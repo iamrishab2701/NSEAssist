@@ -30,3 +30,4 @@ cloudflare-worker/.dev.vars
 
 # Logs
 *.log
+/.claude/

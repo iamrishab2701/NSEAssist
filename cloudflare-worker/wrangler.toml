@@ -21,3 +21,20 @@ compatibility_date = "2024-09-23"
 #
 # Free tier: 800 req/day, 8 req/min — well within normal app usage.
 # The Worker only calls Twelve Data when Yahoo Finance is unavailable.
+
+# ─── D1 Database (trade memory + prediction tracking) ───────────────────────
+#
+# One-time setup:
+#   1. Run:  wrangler d1 create nseassist-memory
+#   2. Copy the database_id printed in the output and paste it below.
+#   3. Run:  wrangler deploy
+#
+[[d1_databases]]
+binding      = "DB"
+database_name = "nseassist-memory"
+database_id  = "05996c13-bf8e-4dc2-9fef-b91bb82c25de"
+
+# ─── Scheduled cleanup (every Sunday at 2 AM UTC) ───────────────────────────
+# Automatically deletes trade/prediction records older than 6 months.
+[triggers]
+crons = ["0 2 * * 7"]

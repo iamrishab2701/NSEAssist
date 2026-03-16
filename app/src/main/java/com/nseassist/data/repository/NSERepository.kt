@@ -4,8 +4,11 @@ import android.util.Log
 import com.nseassist.analysis.StockScorer
 import com.nseassist.analysis.TechnicalIndicators
 import com.nseassist.analysis.TrendDetector
+import com.nseassist.data.api.MemoryClient
 import com.nseassist.data.api.NewsClient
 import com.nseassist.data.api.YahooFinanceClient
+import com.nseassist.data.model.PredictionLogRequest
+import kotlinx.coroutines.launch
 import com.nseassist.data.model.MarketOverview
 import com.nseassist.data.model.MarketStatus
 import com.nseassist.data.model.MoverItem
@@ -235,7 +238,7 @@ class NSERepository {
             val trend6M = indicators.trend6Month(closes)
             val trend2W = indicators.trend2Week(closes)
 
-            val prediction = indicators.predictPrice(closes, atr)
+            val prediction = indicators.predictPrice(closes, atr, volumes)
 
             val gapType = when {
                 open > prevClose * 1.005 -> "GAP UP"
@@ -341,7 +344,23 @@ class NSERepository {
             val option = scorer.optionAction(stockData)
             val enriched = stockData.copy(score = score, optionAction = option, news = news, newsImpactScore = newsImpact, isDeepEnriched = true)
             val quickTake = generateQuickTake(enriched, thirtyMinCandle, pivots, supertrend30m?.signal ?: "NEUTRAL")
-            enriched.copy(quickTake = quickTake)
+            val result = enriched.copy(quickTake = quickTake)
+
+            // Fire-and-forget prediction log: logs today's prediction and verifies yesterday's
+            kotlinx.coroutines.GlobalScope.launch(Dispatchers.IO) {
+                runCatching {
+                    MemoryClient.logPrediction(PredictionLogRequest(
+                        symbol               = cleanSymbol,
+                        predictionDirection  = result.predictedDirection,
+                        predictedHigh        = result.predictedHigh,
+                        predictedLow         = result.predictedLow,
+                        confidence           = result.predictionConfidence,
+                        actualClose          = result.ltp,
+                    ))
+                }
+            }
+
+            result
         }
     }
 
@@ -448,7 +467,7 @@ class NSERepository {
                 val trend      = trendDetector.detect(closes, volumes.map { it.toLong() })
                 val trend6M    = indicators.trend6Month(closes)
                 val trend2W    = indicators.trend2Week(closes)
-                val prediction = indicators.predictPrice(closes, atr)
+                val prediction = indicators.predictPrice(closes, atr, volumes)
 
                 // ── 30-min intraday analysis ─────────────────────────────────
                 val thirtyMinBars = intraday?.candles ?: emptyList()

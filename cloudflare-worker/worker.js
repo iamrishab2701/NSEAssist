@@ -66,6 +66,25 @@ const GLOBAL_INDEX_META = {
   "USDINR=X":  { name: "USD/INR",     group: "forex" },
 };
 
+// ── Lean US stock list for Global Trends impact cards ─────────────────────────
+// 1-2 key stocks per sector, used in handleGlobalTrends to stay under the
+// Cloudflare Workers 50-subrequest limit. (Full list used only by /screener fallback.)
+const TRENDS_US_STOCKS = [
+  { symbol: "AAPL",  name: "Apple Inc.",           sector: "Technology"            },
+  { symbol: "NVDA",  name: "NVIDIA Corp.",          sector: "Technology"            },
+  { symbol: "JPM",   name: "JPMorgan Chase",        sector: "Financial Services"    },
+  { symbol: "GS",    name: "Goldman Sachs",         sector: "Financial Services"    },
+  { symbol: "XOM",   name: "Exxon Mobil",           sector: "Energy"                },
+  { symbol: "UNH",   name: "UnitedHealth Group",    sector: "Healthcare"            },
+  { symbol: "AMZN",  name: "Amazon.com Inc.",       sector: "Consumer Cyclical"     },
+  { symbol: "WMT",   name: "Walmart Inc.",          sector: "Consumer Defensive"    },
+  { symbol: "CAT",   name: "Caterpillar Inc.",      sector: "Industrials"           },
+  { symbol: "FCX",   name: "Freeport-McMoRan",      sector: "Basic Materials"       },
+  { symbol: "NFLX",  name: "Netflix Inc.",          sector: "Communication Services"},
+  { symbol: "NEE",   name: "NextEra Energy",        sector: "Utilities"             },
+  { symbol: "PLD",   name: "Prologis Inc.",         sector: "Real Estate"           },
+];
+
 // ── US large-cap stocks by sector — for impact cards when screener is unavailable ──
 // chartToQuote (v8/chart) works without crumb, so these are always fetchable.
 const FALLBACK_US_STOCKS = [
@@ -184,6 +203,45 @@ const FALLBACK_INDIA_STOCKS = [
   { symbol: "DLF.NS",        nseSymbol: "DLF",        name: "DLF Ltd.",                 sector: "Real Estate" },
   { symbol: "GODREJPROP.NS", nseSymbol: "GODREJPROP", name: "Godrej Properties",        sector: "Real Estate" },
 ];
+
+// ── Indian ADRs listed on NYSE/NASDAQ ─────────────────────────────────────────
+// These are the most direct pre-market signals for how Indian stocks will open.
+// ADR close on NYSE = strong predictor for NSE open next morning.
+const INDIAN_ADRS = [
+  { symbol: "INFY",  nseSymbol: "INFY",       name: "Infosys Ltd."           },
+  { symbol: "WIT",   nseSymbol: "WIPRO",      name: "Wipro Ltd."             },
+  { symbol: "HDB",   nseSymbol: "HDFCBANK",   name: "HDFC Bank Ltd."         },
+  { symbol: "IBN",   nseSymbol: "ICICIBANK",  name: "ICICI Bank Ltd."        },
+  { symbol: "RDY",   nseSymbol: "DRREDDY",    name: "Dr. Reddy's Labs"       },
+  { symbol: "TTM",   nseSymbol: "TATAMOTORS", name: "Tata Motors Ltd."       },
+];
+
+// ── Commodity → Indian stock correlation map ──────────────────────────────────
+// invertImpact: crude UP → OMC refiners sell off (pass-through lag), so impact is NEGATIVE
+const COMMODITY_INDIA_MAP = {
+  "CL=F": {
+    sector: "Energy",
+    invertImpact: true,   // crude UP = bad for refining OMCs
+    indianStocks: [
+      { symbol: "ONGC.NS",     nseSymbol: "ONGC",     name: "ONGC",          sector: "Energy" },
+      { symbol: "BPCL.NS",     nseSymbol: "BPCL",     name: "BPCL",          sector: "Energy" },
+      { symbol: "IOC.NS",      nseSymbol: "IOC",       name: "Indian Oil",    sector: "Energy" },
+      { symbol: "RELIANCE.NS", nseSymbol: "RELIANCE",  name: "Reliance",      sector: "Energy" },
+      { symbol: "GAIL.NS",     nseSymbol: "GAIL",      name: "GAIL",          sector: "Energy" },
+    ],
+    keywords: ["crude", "oil", "petroleum", "OPEC", "energy", "brent"],
+  },
+  "GC=F": {
+    sector: "Precious Metals",
+    invertImpact: false,  // gold UP = positive for jewelry/gold finance stocks
+    indianStocks: [
+      { symbol: "TITAN.NS",      nseSymbol: "TITAN",      name: "Titan Company",   sector: "Consumer Cyclical" },
+      { symbol: "MUTHOOTFIN.NS", nseSymbol: "MUTHOOTFIN", name: "Muthoot Finance", sector: "Financial Services" },
+      { symbol: "MANAPPURAM.NS", nseSymbol: "MANAPPURAM", name: "Manappuram Fin.", sector: "Financial Services" },
+    ],
+    keywords: ["gold", "bullion", "precious metals", "yellow metal"],
+  },
+};
 
 // ── Fallback NSE stock list for screener when Yahoo screener is unavailable ───
 const FALLBACK_SYMBOLS = [
@@ -668,27 +726,68 @@ function screenerBody(offset, size, maxPrice) {
 // ── News: RSS sources ─────────────────────────────────────────────────────────
 
 const RSS_SOURCES = [
-  { name: "Moneycontrol",       url: "https://www.moneycontrol.com/rss/buzzingstocks.xml" },
-  { name: "Economic Times",     url: "https://economictimes.indiatimes.com/markets/stocks/rssfeeds/2146842.cms" },
-  { name: "ET Markets",         url: "https://economictimes.indiatimes.com/markets/rssfeeds/1977021501.cms" },
-  { name: "Business Standard",  url: "https://www.business-standard.com/rss/markets-106.rss" },
-  { name: "LiveMint",           url: "https://www.livemint.com/rss/markets" },
-  { name: "Financial Express",  url: "https://www.financialexpress.com/market/feed/" },
-  { name: "Reuters India",      url: "https://feeds.reuters.com/reuters/INbusinessNews" },
-  { name: "Business Today",     url: "https://www.businesstoday.in/rss/topic/markets" },
-  { name: "The Hindu Business", url: "https://www.thehindu.com/business/?service=rss" },
-  { name: "Hindu BusinessLine", url: "https://www.thehindubusinessline.com/companies/?service=rss" },
-  { name: "NDTV Profit",        url: "https://www.ndtvprofit.com/rss" },
-  { name: "CNBC TV18",          url: "https://www.cnbctv18.com/rss" },
+  // ── Core Indian financial news ──────────────────────────────────────────────
+  { name: "Moneycontrol",         url: "https://www.moneycontrol.com/rss/buzzingstocks.xml" },
+  { name: "MC Market Reports",    url: "https://www.moneycontrol.com/rss/marketreports.xml" },
+  { name: "MC Results",           url: "https://www.moneycontrol.com/rss/results.xml" },
+  { name: "Economic Times",       url: "https://economictimes.indiatimes.com/markets/stocks/rssfeeds/2146842.cms" },
+  { name: "ET Markets",           url: "https://economictimes.indiatimes.com/markets/rssfeeds/1977021501.cms" },
+  { name: "ET Derivatives",       url: "https://economictimes.indiatimes.com/markets/derivatives/rssfeeds/2146846.cms" },
+  { name: "Business Standard",    url: "https://www.business-standard.com/rss/markets-106.rss" },
+  { name: "BS Companies",         url: "https://www.business-standard.com/rss/companies-101.rss" },
+  { name: "LiveMint",             url: "https://www.livemint.com/rss/markets" },
+  { name: "Financial Express",    url: "https://www.financialexpress.com/market/feed/" },
+  { name: "Reuters India",        url: "https://feeds.reuters.com/reuters/INbusinessNews" },
+  { name: "Business Today",       url: "https://www.businesstoday.in/rss/topic/markets" },
+  { name: "The Hindu Business",   url: "https://www.thehindu.com/business/?service=rss" },
+  { name: "Hindu BusinessLine",   url: "https://www.thehindubusinessline.com/companies/?service=rss" },
+  { name: "NDTV Profit",          url: "https://www.ndtvprofit.com/rss" },
+  { name: "CNBC TV18",            url: "https://www.cnbctv18.com/rss" },
+  // ── Additional intraday-focused sources ─────────────────────────────────────
+  { name: "BQ Prime",             url: "https://www.bqprime.com/rss/markets" },
+  { name: "Zee Business",         url: "https://zeebiz.com/markets/rss" },
+  { name: "Investing.com India",  url: "https://in.investing.com/rss/news_25.rss" },
+  { name: "Firstpost Business",   url: "https://www.firstpost.com/rss/business.xml" },
+  { name: "Outlook Business",     url: "https://www.outlookindia.com/business/rss" },
+  { name: "The Print Economy",    url: "https://theprint.in/category/economy/feed/" },
 ];
 
 const NEWS_UA   = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
 const ITEM_RE   = /<item[^>]*>([\s\S]*?)<\/item>/gi;
 const TITLE_RE  = /<title[^>]*>([\s\S]*?)<\/title>/i;
 const DATE_RE   = /<pubDate[^>]*>([\s\S]*?)<\/pubDate>/i;
-const POS_WORDS = ["surge","rally","gain","gains","rise","rises","up","bullish","buy","breakout","profit","growth","strong","upgrade","beat","outperform","record","high","positive","boost"];
-const NEG_WORDS = ["fall","falls","drop","drops","crash","decline","declines","down","bearish","sell","breakdown","loss","losses","weak","downgrade","miss","underperform","low","slump","concern","risk"];
-const MAX_NEWS_AGE_MS        = 24 * 60 * 60 * 1000; // /news endpoint: 24 hours
+const POS_WORDS = [
+  // Price action
+  "surge","surges","rally","rallies","gain","gains","rise","rises","up","jumps","jump","soars","soar","spike",
+  // Momentum / technical
+  "bullish","buy","breakout","breakouts","multibagger","52-week high","all-time high","upper circuit",
+  // Fundamentals
+  "profit","profits","growth","strong","record","beat","beats","outperform","positive","boost","boost",
+  "revenue up","earnings up","profit up","beats estimate","beats expectations","better than expected",
+  // Corporate actions (direct intraday movers)
+  "dividend","buyback","bonus","stock split","acquisition","merger","contract","order win","order wins",
+  "bulk buy","block buy","insider buying","stake increase","promoter buying","fii buying","dii buying",
+  "upgrade","target raised","target hike","rating upgrade","strong buy","overweight","accumulate",
+  // Results
+  "q1 profit","q2 profit","q3 profit","q4 profit","quarterly profit","net profit up","results beat",
+];
+const NEG_WORDS = [
+  // Price action
+  "fall","falls","drop","drops","crash","crashes","decline","declines","down","slumps","slump","plunge","plunges","lower circuit",
+  // Momentum / technical
+  "bearish","sell","breakdown","breakdowns","52-week low","all-time low",
+  // Fundamentals
+  "loss","losses","weak","concern","risk","miss","misses","underperform","negative",
+  "revenue down","earnings down","profit down","misses estimate","misses expectations","below expected",
+  // Corporate / regulatory risk (direct intraday movers)
+  "default","writeoff","write-off","fraud","probe","notice","penalty","sebi notice","tax demand",
+  "downgrade","target cut","rating downgrade","sell rating","underweight","reduce","avoid",
+  "bulk sell","block sell","insider selling","stake sale","promoter selling","fii selling",
+  "restructure","debt","npa","haircut","insolvency","nclt","bankruptcy",
+  // Results
+  "q1 loss","q2 loss","q3 loss","q4 loss","quarterly loss","net loss","results miss",
+];
+const MAX_NEWS_AGE_MS        = 12 * 60 * 60 * 1000; // /news endpoint: 12 hours (intraday focus)
 const MAX_TRENDS_NEWS_AGE_MS = 12 * 60 * 60 * 1000; // /global-trends impact cards: 12 hours
 
 // ── News helpers ──────────────────────────────────────────────────────────────
@@ -793,7 +892,7 @@ async function handleNews(searchParams) {
   const allArticles = results.flat();
   const now         = Date.now();
 
-  // Filter: stock-relevant + within last 24 hours
+  // Filter: stock-relevant + within last 12 hours (intraday focus)
   const relevant = allArticles.filter(a =>
     (now - a.publishedAt) <= MAX_NEWS_AGE_MS && isNewsRelevant(a.headline, terms)
   );
@@ -962,6 +1061,82 @@ async function fetchTopUSMovers() {
   return movers;
 }
 
+/**
+ * Fetch US movers using the lean TRENDS_US_STOCKS list.
+ * 13 chartToQuote calls = 13 subrequests (vs 36 for fetchTopUSMovers with screener fallback).
+ */
+async function fetchTrendsUSMovers() {
+  const results = await Promise.all(
+    TRENDS_US_STOCKS.map(async ({ symbol, name, sector }) => {
+      const q = await chartToQuote(symbol);
+      if (!q || Math.abs(q.regularMarketChangePercent ?? 0) < 0.5) return null;
+      return {
+        symbol,
+        name:      q.longName || q.shortName || name,
+        changePct: q.regularMarketChangePercent ?? 0,
+        sector,
+        direction: (q.regularMarketChangePercent ?? 0) >= 0 ? "UP" : "DOWN",
+      };
+    })
+  );
+  const movers = results.filter(Boolean);
+  console.log(`Trends US movers: ${movers.length}/${TRENDS_US_STOCKS.length}`);
+  return movers;
+}
+
+/**
+ * Fetch Indian ADR quotes.
+ * Primary:  Twelve Data /quote — reliable, no crumb needed, works from Cloudflare IPs.
+ * Fallback: Yahoo Finance v7/quote batch with explicit fields.
+ *
+ * symbolMap for Twelve Data: { "INFY:NYSE": "INFY", "WIT:NYSE": "WIT", ... }
+ * The "INFY:NYSE" key disambiguates NYSE ADR from NSE "INFY:NSE".
+ */
+async function fetchAdrBatch(apiKey) {
+  // Primary: Twelve Data — proven to work from Cloudflare Workers.
+  // US stocks don't need exchange suffix on Twelve Data; bare ticker is sufficient.
+  if (apiKey) {
+    const symbolMap = Object.fromEntries(
+      INDIAN_ADRS.map(a => [a.symbol, a.symbol])   // "INFY" → "INFY"
+    );
+    const results = await fetchTwelveQuotes(symbolMap, apiKey);
+    if (results.length > 0) {
+      console.log(`ADR batch (Twelve Data): ${results.length}/${INDIAN_ADRS.length}`);
+      return results;
+    }
+    console.log(`ADR batch: Twelve Data returned empty (apiKey=${apiKey ? "set" : "missing"}), trying Yahoo`);
+  }
+
+  // Fallback: Yahoo Finance v7/quote batch with explicit fields
+  const symbols = INDIAN_ADRS.map(a => a.symbol).join(",");
+  const fields  = "regularMarketPrice,regularMarketChangePercent,regularMarketPreviousClose";
+  for (const [base, crumb, cookies] of [
+    [YAHOO1, _crumb, _cookies],
+    [YAHOO1, "",     ""       ],
+    [YAHOO2, "",     ""       ],
+  ]) {
+    try {
+      const url  = `${base}/v7/finance/quote?symbols=${enc(symbols)}&fields=${enc(fields)}${crumbParam(crumb)}`;
+      const resp = await fetch(url, { headers: yahooHeaders(cookies) });
+      if (!resp.ok) continue;
+      const j   = await resp.json();
+      const res = j?.quoteResponse?.result ?? [];
+      if (res.length > 0) {
+        console.log(`ADR batch (Yahoo): ${res.length}/${INDIAN_ADRS.length}`);
+        return res;
+      }
+    } catch (e) { console.log("ADR Yahoo error:", e.message); }
+  }
+  console.log("ADR batch: all sources failed");
+  return [];
+}
+
+/** Returns "STRONG" for sectors with well-known US→India correlations, else "MODERATE". */
+function getSectorCorrelationStrength(sector) {
+  const strong = new Set(["Technology", "Financial Services", "Energy", "Healthcare", "Basic Materials"]);
+  return strong.has(sector) ? "STRONG" : "MODERATE";
+}
+
 function computeOverallBias(items) {
   const weight = { "^DJI": 2, "^GSPC": 2, "^IXIC": 2, "^N225": 1, "^HSI": 1, "^FTSE": 1, "^NSEI": 1.5, "^NSEBANK": 1.5 };
   let score = 0;
@@ -980,19 +1155,50 @@ function computeOverallBias(items) {
  * Returns global market indices + impact cards linking foreign movers to Indian stocks.
  * Full response cached 15 min in Worker memory. Indian sector map cached 1 hour.
  */
-async function handleGlobalTrends() {
+async function handleGlobalTrends(apiKey = "") {
   const now = Date.now();
   if (_trendsBody && (now - _trendsTs) < TRENDS_TTL) {
     return new Response(_trendsBody, { headers: { ...corsHeaders(), "X-Cache": "HIT" } });
   }
 
-  // Fetch all data in parallel
-  const [globalQuotes, usMovers, allRssArticles, indSectorMap] = await Promise.all([
-    fetchGlobalIndexQuotes(),   // chartToQuote per-symbol — reliable for indices/forex/commodities
-    fetchTopUSMovers(),
-    fetchAllRssArticles(),
+  // ── Budget-aware parallel fetch ───────────────────────────────────────────
+  // Cloudflare Workers free tier: 50 subrequests per invocation.
+  //   fetchGlobalIndexQuotes : 12  (one chartToQuote per symbol)
+  //   fetchTrendsUSMovers    : 13  (lean list — one per sector)
+  //   fetchAdrBatch          :  1  (single Twelve Data batch)
+  //   buildIndianSectorMap   :  0  (hardcoded, no network)
+  // Total: ~26 subrequests. Well under the limit.
+  // RSS is intentionally skipped here; all 22 sources are used by the /news endpoint.
+  const [globalQuotes, usMovers, indSectorMap, rawAdrQuotes] = await Promise.all([
+    fetchGlobalIndexQuotes(),
+    fetchTrendsUSMovers(),
     buildIndianSectorMap(),
+    fetchAdrBatch(apiKey),
   ]);
+  const allRssArticles = [];  // no RSS in trends — saves ~22 subrequests
+
+  // ── Build Indian ADR items ─────────────────────────────────────────────────
+  const adrMap = new Map(rawAdrQuotes.map(q => [q.symbol, q]));
+  const adrs = INDIAN_ADRS.map(adr => {
+    const q = adrMap.get(adr.symbol);
+    if (!q) return null;
+    const price = q.regularMarketPrice ?? 0;
+    if (price === 0) return null;
+    const prevClose = q.regularMarketPreviousClose ?? 0;
+    let changePct   = q.regularMarketChangePercent ?? 0;
+    // Recompute if Yahoo returns 0 outside market hours
+    if (changePct === 0 && price > 0 && prevClose > 0) {
+      changePct = ((price - prevClose) / prevClose) * 100;
+    }
+    return {
+      symbol:    adr.symbol,
+      name:      `${adr.name} (→ ${adr.nseSymbol})`,
+      price,
+      changePct,
+      direction: changePct >= 0 ? "UP" : "DOWN",
+    };
+  }).filter(Boolean);
+  console.log(`Indian ADRs fetched: ${adrs.length}/${INDIAN_ADRS.length}`);
 
   // ── Bucket global indices by group ────────────────────────────────────────
   const groups = { us: [], asia: [], india: [], commodities: [], forex: [] };
@@ -1036,16 +1242,48 @@ async function handleGlobalTrends() {
       .map(a => a.headline);
 
     impacts.push({
-      foreignSymbol:    mover.symbol,
-      foreignName:      mover.name,
-      foreignChangePct: mover.changePct,
-      direction:        mover.direction,
-      sector:           sector,
-      impactDirection:  mover.direction === "UP" ? "POSITIVE" : "NEGATIVE",
-      indianStocks:     indianStocks.slice(0, 5),
-      newsHeadlines:    headlines,
+      foreignSymbol:       mover.symbol,
+      foreignName:         mover.name,
+      foreignChangePct:    mover.changePct,
+      direction:           mover.direction,
+      sector:              sector,
+      impactDirection:     mover.direction === "UP" ? "POSITIVE" : "NEGATIVE",
+      indianStocks:        indianStocks.slice(0, 5),
+      newsHeadlines:       headlines,
+      correlationStrength: getSectorCorrelationStrength(sector),
     });
   }
+
+  // ── Commodity impact cards ────────────────────────────────────────────────
+  for (const [sym, meta] of Object.entries(COMMODITY_INDIA_MAP)) {
+    const cq = globalQuotes.find(q => q.symbol === sym);
+    if (!cq) continue;
+    const changePct = cq.regularMarketChangePercent ?? 0;
+    if (Math.abs(changePct) < 0.5) continue;
+    const direction = changePct >= 0 ? "UP" : "DOWN";
+    const impactDirection = meta.invertImpact
+      ? (direction === "UP" ? "NEGATIVE" : "POSITIVE")
+      : (direction === "UP" ? "POSITIVE" : "NEGATIVE");
+
+    const headlines = allRssArticles
+      .filter(a => (now - a.publishedAt) <= MAX_TRENDS_NEWS_AGE_MS && isNewsRelevant(a.headline, meta.keywords))
+      .sort((a, b) => b.publishedAt - a.publishedAt)
+      .slice(0, 3)
+      .map(a => a.headline);
+
+    impacts.push({
+      foreignSymbol:       sym,
+      foreignName:         GLOBAL_INDEX_META[sym]?.name ?? sym,
+      foreignChangePct:    changePct,
+      direction,
+      sector:              meta.sector,
+      impactDirection,
+      indianStocks:        meta.indianStocks,
+      newsHeadlines:       headlines,
+      correlationStrength: "STRONG",
+    });
+  }
+
   // Biggest movers first
   impacts.sort((a, b) => Math.abs(b.foreignChangePct) - Math.abs(a.foreignChangePct));
 
@@ -1058,7 +1296,8 @@ async function handleGlobalTrends() {
     india:       groups.india,
     commodities: groups.commodities,
     forex:       groups.forex,
-    impacts:     impacts.slice(0, 8),
+    adrs:        adrs,
+    impacts:     impacts.slice(0, 10),
     overallBias: overallBias,
     cachedAt:    now,
   };
@@ -1176,30 +1415,266 @@ async function handleIntraday(searchParams) {
 
 // ── Main entry point ──────────────────────────────────────────────────────────
 
+// ── D1 Trade Memory ────────────────────────────────────────────────────────────
+//
+// Tables:
+//   paper_trades    — user-logged AI trade setups + outcome tracking
+//   signal_outcomes — historical signal firing results (from Signal Replay)
+//   prediction_log  — daily price prediction vs actual close tracking
+//
+// Setup (one-time):
+//   wrangler d1 create nseassist-memory  → copy database_id into wrangler.toml
+//   wrangler deploy
+
+let _dbInitialized = false;
+
+async function ensureDb(env) {
+  if (_dbInitialized || !env?.DB) return;
+  try {
+    await env.DB.exec(`
+      CREATE TABLE IF NOT EXISTS paper_trades (
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        symbol        TEXT    NOT NULL,
+        company_name  TEXT    DEFAULT '',
+        direction     TEXT    DEFAULT 'BUY',
+        entry_price   REAL    DEFAULT 0,
+        target_text   TEXT    DEFAULT '',
+        stop_loss_text TEXT   DEFAULT '',
+        quantity      INTEGER DEFAULT 0,
+        session_phase TEXT    DEFAULT '',
+        ai_provider   TEXT    DEFAULT '',
+        confidence    INTEGER DEFAULT 0,
+        verdict       TEXT    DEFAULT '',
+        rr_ratio      TEXT    DEFAULT '',
+        reason        TEXT    DEFAULT '',
+        logged_at     INTEGER NOT NULL,
+        outcome       TEXT    DEFAULT 'OPEN',
+        outcome_price REAL,
+        outcome_time  INTEGER
+      )
+    `);
+    await env.DB.exec(`
+      CREATE TABLE IF NOT EXISTS signal_outcomes (
+        id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+        symbol               TEXT    NOT NULL,
+        signal_date          INTEGER NOT NULL,
+        rsi                  REAL    DEFAULT 0,
+        above_vwap           INTEGER DEFAULT 0,
+        macd_bullish         INTEGER DEFAULT 0,
+        trend_signal         TEXT    DEFAULT '',
+        session_phase        TEXT    DEFAULT '',
+        market_condition     TEXT    DEFAULT '',
+        prediction_direction TEXT    DEFAULT '',
+        score                REAL    DEFAULT 0,
+        outcome              TEXT    DEFAULT 'UNKNOWN',
+        created_at           INTEGER NOT NULL
+      )
+    `);
+    await env.DB.exec(`
+      CREATE TABLE IF NOT EXISTS prediction_log (
+        id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+        symbol               TEXT    NOT NULL,
+        prediction_direction TEXT    NOT NULL,
+        predicted_high       REAL    DEFAULT 0,
+        predicted_low        REAL    DEFAULT 0,
+        confidence           INTEGER DEFAULT 0,
+        actual_close         REAL,
+        was_correct          INTEGER,
+        logged_at            INTEGER NOT NULL,
+        checked_at           INTEGER
+      )
+    `);
+    _dbInitialized = true;
+  } catch(e) {
+    console.log("DB init error:", e.message);
+  }
+}
+
+async function cleanupOldData(env) {
+  if (!env?.DB) return;
+  const cutoff = Date.now() - (180 * 24 * 60 * 60 * 1000); // 6 months
+  try {
+    await env.DB.prepare("DELETE FROM paper_trades    WHERE logged_at  < ?").bind(cutoff).run();
+    await env.DB.prepare("DELETE FROM signal_outcomes WHERE created_at < ?").bind(cutoff).run();
+    await env.DB.prepare("DELETE FROM prediction_log  WHERE logged_at  < ?").bind(cutoff).run();
+    console.log("Memory cleanup complete. Cutoff:", new Date(cutoff).toISOString());
+  } catch(e) {
+    console.log("Cleanup error:", e.message);
+  }
+}
+
+async function handleMemory(pathname, request, env) {
+  await ensureDb(env);
+  if (!env?.DB) return jsonError("Memory not available — add DB binding in wrangler.toml", 503);
+
+  try {
+
+    // ── POST /memory/trade — log a paper trade ────────────────────────────────
+    if (pathname === "/memory/trade" && request.method === "POST") {
+      const b = await request.json();
+      const r = await env.DB.prepare(
+        `INSERT INTO paper_trades
+         (symbol,company_name,direction,entry_price,target_text,stop_loss_text,
+          quantity,session_phase,ai_provider,confidence,verdict,rr_ratio,reason,logged_at)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+      ).bind(
+        b.symbol || '', b.company_name || '', b.direction || 'BUY',
+        b.entry_price || 0, b.target_text || '', b.stop_loss_text || '',
+        b.quantity || 0, b.session_phase || '', b.ai_provider || '',
+        b.confidence || 0, b.verdict || '', b.rr_ratio || '', b.reason || '',
+        Date.now()
+      ).run();
+      return new Response(JSON.stringify({ id: r.meta?.last_row_id ?? 0 }), { headers: corsHeaders() });
+    }
+
+    // ── GET /memory/trades?symbol=X ───────────────────────────────────────────
+    if (pathname === "/memory/trades" && request.method === "GET") {
+      const sym = new URL(request.url).searchParams.get("symbol");
+      const rows = sym
+        ? await env.DB.prepare("SELECT * FROM paper_trades WHERE symbol=? ORDER BY logged_at DESC LIMIT 100").bind(sym).all()
+        : await env.DB.prepare("SELECT * FROM paper_trades ORDER BY logged_at DESC LIMIT 200").all();
+      return new Response(JSON.stringify({ trades: rows.results ?? [] }), { headers: corsHeaders() });
+    }
+
+    // ── PATCH /memory/trade-outcome — update outcome ──────────────────────────
+    if (pathname === "/memory/trade-outcome" && request.method === "PATCH") {
+      const b = await request.json();
+      await env.DB.prepare("UPDATE paper_trades SET outcome=?,outcome_price=?,outcome_time=? WHERE id=?")
+        .bind(b.outcome, b.outcome_price ?? null, Date.now(), b.id).run();
+      return new Response(JSON.stringify({ ok: true }), { headers: corsHeaders() });
+    }
+
+    // ── POST /memory/signal — bulk log signal outcomes ────────────────────────
+    if (pathname === "/memory/signal" && request.method === "POST") {
+      const body  = await request.json();
+      const items = Array.isArray(body) ? body : [body];
+      const now   = Date.now();
+      for (const s of items) {
+        await env.DB.prepare(
+          `INSERT INTO signal_outcomes
+           (symbol,signal_date,rsi,above_vwap,macd_bullish,trend_signal,
+            session_phase,market_condition,prediction_direction,score,outcome,created_at)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`
+        ).bind(
+          s.symbol || '', s.signal_date || now, s.rsi || 0, s.above_vwap ? 1 : 0,
+          s.macd_bullish ? 1 : 0, s.trend_signal || '', s.session_phase || '',
+          s.market_condition || '', s.prediction_direction || '', s.score || 0,
+          s.outcome || 'UNKNOWN', now
+        ).run();
+      }
+      return new Response(JSON.stringify({ ok: true }), { headers: corsHeaders() });
+    }
+
+    // ── POST /memory/prediction — log + auto-verify previous prediction ───────
+    if (pathname === "/memory/prediction" && request.method === "POST") {
+      const b   = await request.json();
+      const now = Date.now();
+      // If caller sends actual_close, verify the most recent unverified prediction
+      if (b.actual_close && b.actual_close > 0) {
+        const prev = await env.DB.prepare(
+          "SELECT id,prediction_direction FROM prediction_log WHERE symbol=? AND was_correct IS NULL ORDER BY logged_at DESC LIMIT 1"
+        ).bind(b.symbol).first();
+        if (prev) {
+          const correct = prev.prediction_direction === b.prediction_direction ? 1 : 0;
+          await env.DB.prepare("UPDATE prediction_log SET was_correct=?,actual_close=?,checked_at=? WHERE id=?")
+            .bind(correct, b.actual_close, now, prev.id).run();
+        }
+      }
+      await env.DB.prepare(
+        `INSERT INTO prediction_log (symbol,prediction_direction,predicted_high,predicted_low,confidence,logged_at)
+         VALUES (?,?,?,?,?,?)`
+      ).bind(b.symbol, b.prediction_direction || '', b.predicted_high || 0,
+             b.predicted_low || 0, b.confidence || 0, now).run();
+      return new Response(JSON.stringify({ ok: true }), { headers: corsHeaders() });
+    }
+
+    // ── GET /memory/ai-context?symbol=X — aggregated context for AI prompt ────
+    if (pathname === "/memory/ai-context" && request.method === "GET") {
+      const sym = new URL(request.url).searchParams.get("symbol");
+      if (!sym) return jsonError("symbol required", 400);
+      const ago30 = Date.now() - 30 * 24 * 60 * 60 * 1000;
+
+      const [sigRows, predRows, tradeRows, sessRows] = await Promise.all([
+        env.DB.prepare("SELECT outcome FROM signal_outcomes WHERE symbol=? AND created_at>? ORDER BY created_at DESC LIMIT 20").bind(sym, ago30).all(),
+        env.DB.prepare("SELECT was_correct FROM prediction_log WHERE symbol=? AND was_correct IS NOT NULL ORDER BY logged_at DESC LIMIT 20").bind(sym).all(),
+        env.DB.prepare("SELECT verdict,direction,outcome,confidence FROM paper_trades WHERE symbol=? ORDER BY logged_at DESC LIMIT 5").bind(sym).all(),
+        env.DB.prepare("SELECT session_phase,COUNT(*) as total,SUM(CASE WHEN outcome='WIN' THEN 1 ELSE 0 END) as wins FROM signal_outcomes WHERE symbol=? AND created_at>? GROUP BY session_phase").bind(sym, ago30).all(),
+      ]);
+
+      const sigs   = sigRows.results   ?? [];
+      const preds  = predRows.results  ?? [];
+      const trades = tradeRows.results ?? [];
+      const sess   = sessRows.results  ?? [];
+
+      const winCount     = sigs.filter(s => s.outcome === 'WIN').length;
+      const correctCount = preds.filter(p => p.was_correct === 1).length;
+
+      let bestSession = '', bestRate = 0;
+      for (const row of sess) {
+        const rate = row.total > 0 ? row.wins / row.total : 0;
+        if (rate > bestRate) { bestRate = rate; bestSession = row.session_phase || ''; }
+      }
+
+      const hasData = sigs.length > 0 || preds.length > 0 || trades.length > 0;
+      return new Response(JSON.stringify({
+        symbol: sym, has_data: hasData,
+        signal_win_rate:    sigs.length  > 0 ? winCount     / sigs.length  : 0,
+        signal_count:       sigs.length,  win_count: winCount,
+        best_session:       bestSession,
+        prediction_accuracy: preds.length > 0 ? correctCount / preds.length : 0,
+        prediction_count:   preds.length,
+        recent_trades:      trades,
+      }), { headers: corsHeaders() });
+    }
+
+    // ── DELETE /memory/cleanup — manual cleanup trigger ───────────────────────
+    if (pathname === "/memory/cleanup" && request.method === "DELETE") {
+      await cleanupOldData(env);
+      return new Response(JSON.stringify({ ok: true }), { headers: corsHeaders() });
+    }
+
+    return jsonError(`Unknown memory endpoint: ${pathname}`, 404);
+  } catch(e) {
+    return jsonError(`Memory error: ${e.message}`, 500);
+  }
+}
+
+// ── Main fetch + scheduled handlers ──────────────────────────────────────────
+
 export default {
   async fetch(request, env) {
-    const url    = new URL(request.url);
-    const apiKey = env?.TWELVE_DATA_KEY ?? ""; // set via: wrangler secret put TWELVE_DATA_KEY
+    const url = new URL(request.url);
 
     if (request.method === "OPTIONS") {
       return new Response(null, { status: 204, headers: corsHeaders() });
     }
 
+    const { pathname, searchParams } = url;
+
+    // Memory endpoints — route before Yahoo session init (no session needed)
+    if (pathname.startsWith("/memory")) return handleMemory(pathname, request, env);
+
+    const apiKey = env?.TWELVE_DATA_KEY ?? ""; // set via: wrangler secret put TWELVE_DATA_KEY
+
     // Best-effort Yahoo session init (never crashes if Yahoo is blocked)
     await ensureSession();
 
     try {
-      const { pathname, searchParams } = url;
       if (pathname === "/screener") return handleScreener(searchParams, apiKey);
       if (pathname === "/quotes")   return handleQuotes(searchParams, apiKey);
       if (pathname === "/history")  return handleHistory(searchParams, apiKey);
       if (pathname === "/profile")  return handleProfile(searchParams);
       if (pathname === "/news")          return handleNews(searchParams);
-      if (pathname === "/global-trends") return handleGlobalTrends();
+      if (pathname === "/global-trends") return handleGlobalTrends(apiKey);
       if (pathname === "/intraday")      return handleIntraday(searchParams);
       return jsonError(`Unknown endpoint: ${pathname}`, 404);
     } catch (e) {
       return jsonError(e.message, 500);
     }
+  },
+
+  // Cron trigger — auto-cleanup every Sunday at 2 AM UTC (set in wrangler.toml)
+  async scheduled(controller, env, ctx) {
+    ctx.waitUntil(cleanupOldData(env));
   },
 };

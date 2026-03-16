@@ -19,10 +19,12 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.navigation.NavController
+import com.nseassist.analysis.SignalReplay
 import com.nseassist.data.model.AiProvider
 import com.nseassist.data.model.AiSettings
 import com.nseassist.data.model.NewsSentiment
 import com.nseassist.data.model.NewsResult
+import com.nseassist.data.model.PaperTradeRequest
 import com.nseassist.data.model.QuickTake
 import com.nseassist.data.model.SingleStockAiAnalysis
 import com.nseassist.data.model.StockData
@@ -36,10 +38,12 @@ fun StockDetailScreen(navController: NavController, symbol: String, vm: MainView
     val detailState         by vm.stockDetail.collectAsState()
     val newsState           by vm.stockNews.collectAsState()
     val singleStockAnalysis by vm.singleStockAnalysis.collectAsState()
+    val signalReplayState   by vm.signalReplay.collectAsState()
     val aiSettings          by vm.aiSettings.collectAsState()
     val capital             by vm.capital.collectAsState()
 
-    var showAiSheet by remember { mutableStateOf(false) }
+    var showAiSheet     by remember { mutableStateOf(false) }
+    var showReplaySheet by remember { mutableStateOf(false) }
 
     LaunchedEffect(symbol) { vm.loadStockDetail(symbol) }
 
@@ -51,15 +55,27 @@ fun StockDetailScreen(navController: NavController, symbol: String, vm: MainView
                 stock          = successStock,
                 initialCapital = capital,
                 aiSettings     = aiSettings,
-                newsState      = newsState,          // ← pass so sheet knows if news is ready
+                newsState      = newsState,
                 analysisState  = singleStockAnalysis,
                 onAnalyze      = { provider, cap -> vm.analyzeCurrentStockWithAi(provider, cap) },
+                onLogTrade     = { trade -> vm.logPaperTrade(trade) },
                 onDismiss      = {
                     showAiSheet = false
                     vm.clearSingleStockAnalysis()
                 },
             )
         }
+    }
+
+    // ── Signal Replay bottom sheet ────────────────────────────────────────────
+    if (showReplaySheet) {
+        SignalReplaySheet(
+            state    = signalReplayState,
+            onDismiss = {
+                showReplaySheet = false
+                vm.clearSignalReplay()
+            },
+        )
     }
 
     AppGradientBackground {
@@ -109,7 +125,15 @@ fun StockDetailScreen(navController: NavController, symbol: String, vm: MainView
             is UiState.Error -> Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
                 Text("Error: ${state.message}", color = RedBear)
             }
-            is UiState.Success -> StockDetailContent(state.data, newsState, Modifier.padding(padding))
+            is UiState.Success -> StockDetailContent(
+                stock           = state.data,
+                newsState       = newsState,
+                modifier        = Modifier.padding(padding),
+                onReplaySignals = {
+                    showReplaySheet = true
+                    vm.runSignalReplay(state.data)
+                },
+            )
         }
     }
     } // AppGradientBackground
@@ -126,6 +150,7 @@ private fun SingleStockAiSheet(
     newsState: UiState<NewsResult?>,             // used to warn user if news hasn't loaded yet
     analysisState: UiState<SingleStockAiAnalysis>?,
     onAnalyze: (AiProvider, Double) -> Unit,
+    onLogTrade: (PaperTradeRequest) -> Unit,
     onDismiss: () -> Unit,
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -305,7 +330,7 @@ private fun SingleStockAiSheet(
 
                 // ── Result ────────────────────────────────────────────────────────
                 is UiState.Success -> {
-                    AiSingleStockResult(result = analysisState.data)
+                    AiSingleStockResult(result = analysisState.data, stock = stock, onLogTrade = onLogTrade)
                     OutlinedButton(
                         onClick = onDismiss,
                         modifier = Modifier.fillMaxWidth(),
@@ -322,7 +347,11 @@ private fun SingleStockAiSheet(
 // ── Single-stock result composable ────────────────────────────────────────────
 
 @Composable
-private fun AiSingleStockResult(result: SingleStockAiAnalysis) {
+private fun AiSingleStockResult(
+    result: SingleStockAiAnalysis,
+    stock: StockData,
+    onLogTrade: (PaperTradeRequest) -> Unit,
+) {
     val isGo         = result.verdict == "GO"
     val verdictColor = if (isGo) GreenBull else RedBear
     val dirColor     = when (result.direction) {
@@ -416,6 +445,40 @@ private fun AiSingleStockResult(result: SingleStockAiAnalysis) {
         }
     }
 
+    // ── Log Paper Trade (GO verdicts only) ───────────────────────────────────
+    if (result.verdict == "GO" && result.direction != "SKIP") {
+        var tradeLogged by remember { mutableStateOf(false) }
+        Button(
+            onClick = {
+                if (!tradeLogged) {
+                    onLogTrade(PaperTradeRequest(
+                        symbol       = stock.symbol,
+                        companyName  = stock.name,
+                        direction    = result.direction,
+                        entryPrice   = stock.ltp,
+                        targetText   = result.target,
+                        stopLossText = result.stopLoss,
+                        quantity     = result.quantity,
+                        sessionPhase = stock.sessionPhase,
+                        aiProvider   = result.provider.label,
+                        confidence   = result.confidence,
+                        verdict      = result.verdict,
+                        rrRatio      = result.rrRatio,
+                        reason       = result.reason.take(200),
+                    ))
+                    tradeLogged = true
+                }
+            },
+            modifier = Modifier.fillMaxWidth(),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = if (tradeLogged) GreenBull.copy(alpha = 0.5f) else GreenBull,
+                contentColor = Color.White,
+            ),
+        ) {
+            Text(if (tradeLogged) "Logged ✓" else "Log Paper Trade")
+        }
+    }
+
     // ── Meta ──────────────────────────────────────────────────────────────────
     Text(
         "by ${result.provider.label}  ·  ${result.model}",
@@ -442,10 +505,146 @@ private fun AiResultRow(label: String, value: String, color: Color) {
     }
 }
 
+// ── Signal Replay Bottom Sheet ────────────────────────────────────────────────
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SignalReplaySheet(
+    state: UiState<SignalReplay.SignalReplayResult>?,
+    onDismiss: () -> Unit,
+) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = SheetSurface,
+        dragHandle = { BottomSheetDefaults.DragHandle(color = TextSecondary.copy(alpha = 0.4f)) },
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp)
+                .padding(bottom = 32.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            Text(
+                "📊  Historical Signal Replay",
+                fontWeight = FontWeight.Bold,
+                fontSize = 16.sp,
+                color = TextPrimary,
+            )
+            HorizontalDivider(color = DividerColor, thickness = 0.5.dp)
+
+            when (state) {
+                null, is UiState.Loading -> Box(
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 40.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        CircularProgressIndicator(color = BluePrimary)
+                        Text("Replaying signals on historical data…", color = TextSecondary, fontSize = 13.sp)
+                    }
+                }
+                is UiState.Error -> Text(state.message, color = RedBear, fontSize = 13.sp)
+                is UiState.Success -> {
+                    val r = state.data
+                    if (r.totalSignals == 0) {
+                        Text(
+                            "Not enough historical signals found.\nNeed RSI 45–65 + above EMA20 + MACD bullish to fire at least once in the last 6 months.",
+                            color = TextSecondary,
+                            fontSize = 13.sp,
+                            lineHeight = 20.sp,
+                        )
+                    } else {
+                        val winPct = (r.winRate * 100).toInt()
+                        // Win Rate banner
+                        val winRateColor = when {
+                            r.winRate >= 0.6 -> GreenBull
+                            r.winRate >= 0.4 -> AmberWarn
+                            else             -> RedBear
+                        }
+                        Card(
+                            colors = CardDefaults.cardColors(containerColor = winRateColor.copy(alpha = 0.12f)),
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(16.dp).fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceEvenly,
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                    Text("$winPct%", fontSize = 28.sp, fontWeight = FontWeight.Bold, color = winRateColor)
+                                    Text("Historical Win Rate", color = TextSecondary, fontSize = 11.sp)
+                                }
+                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                    Text("${r.totalSignals}", fontSize = 22.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
+                                    Text("Signals Fired", color = TextSecondary, fontSize = 11.sp)
+                                }
+                            }
+                        }
+
+                        // Breakdown
+                        Card(
+                            colors = CardDefaults.cardColors(containerColor = CardDark),
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                                Text("Outcome Breakdown", fontWeight = FontWeight.SemiBold, color = TextPrimary, fontSize = 13.sp)
+                                HorizontalDivider(color = DividerColor, thickness = 0.5.dp)
+                                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                    Text("Win (Target Hit)", color = GreenBull, fontSize = 13.sp)
+                                    Text("${r.wins}", color = GreenBull, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                }
+                                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                    Text("Loss (SL Hit)", color = RedBear, fontSize = 13.sp)
+                                    Text("${r.losses}", color = RedBear, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                }
+                                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                    Text("Neutral / Small Move", color = TextSecondary, fontSize = 13.sp)
+                                    Text("${r.neutrals}", color = TextSecondary, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                }
+                            }
+                        }
+
+                        // Signal criteria note
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = BluePrimary.copy(alpha = 0.08f),
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text(
+                                "Signal: RSI 45–65 + Price > EMA20 + MACD Bullish\nTarget: ATR × 1.2  ·  Stop: ATR × 0.6  ·  Based on daily candles",
+                                color = BluePrimary.copy(alpha = 0.85f),
+                                fontSize = 11.sp,
+                                lineHeight = 17.sp,
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                            )
+                        }
+                    }
+
+                    OutlinedButton(
+                        onClick = onDismiss,
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = TextSecondary),
+                    ) { Text("Close") }
+                }
+            }
+        }
+    }
+}
+
 // ── Stock detail content ───────────────────────────────────────────────────────
 
 @Composable
-private fun StockDetailContent(stock: StockData, newsState: UiState<NewsResult?>, modifier: Modifier) {
+private fun StockDetailContent(
+    stock: StockData,
+    newsState: UiState<NewsResult?>,
+    modifier: Modifier,
+    onReplaySignals: () -> Unit,
+) {
     val isUp = stock.changePct >= 0
     val priceColor = if (isUp) GreenBull else RedBear
 
@@ -621,6 +820,17 @@ private fun StockDetailContent(stock: StockData, newsState: UiState<NewsResult?>
             }
             if (stock.candlePattern != "NONE") {
                 CheckRow("Bullish candle pattern", stock.candleSignal == "BULLISH")
+            }
+        }
+
+        // Signal Replay button — only when deep analysis has run (has enough history)
+        if (stock.isDeepEnriched) {
+            OutlinedButton(
+                onClick = onReplaySignals,
+                modifier = Modifier.fillMaxWidth(),
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = BluePrimary),
+            ) {
+                Text("📊  Replay Historical Signals")
             }
         }
 
