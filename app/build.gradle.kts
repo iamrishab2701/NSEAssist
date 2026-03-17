@@ -49,14 +49,9 @@ android {
             firebaseAppDistribution {
                 releaseNotes = """v${appVersionName} — What's new:
 
-• Refresh button on stock detail — re-fetches Phase 1 + Phase 2 fresh, bypasses scan cache
-• Refresh bug fix — refresh from Ready to Trade/Breakouts now always fetches live data (not stale scan results)
-• Refresh on scan screens — Ready to Trade & Ready for Breakouts re-run full scan on refresh
-• Paper Trades — GO verdicts logged; outcome buttons (Target Hit / SL Hit / Expired) working
-• Auto-resolve — open trades auto-check current price vs target & SL on Performance screen open
-• AI Audit — stats per AI provider (GO/NO-GO counts, win rate, confidence breakdown)
-• Clear all — confirmation dialog before deleting
-• Bug fix — getTrades crash on null outcome_price (JsonNull) resolved"""
+• Plain English — AI analysis Entry/Stop Loss/Target now explained in simple language, no trading jargon
+• Plain English — QuickTake on stock detail screen uses beginner-friendly explanations
+• No more terms like 'pullback', 'oversold', 'pivot' — everything explained as clear actions"""
                 groups       = "testers"
             }
         }
