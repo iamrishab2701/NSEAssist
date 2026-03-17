@@ -100,7 +100,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     // ── Stock detail cache — back from news/chart sub-screen is instant ───────────
     private var detailCacheSymbol:    String = ""
     private var detailCacheTimestamp: Long   = 0L
-    private val DETAIL_CACHE_TTL = 5 * 60 * 1000L // 5 minutes
+    private val DETAIL_CACHE_TTL = 45_000L // 45 sec — fast for AI-report back-nav, forces re-fetch on re-search
 
     init {
         loadMarketOverview()
@@ -132,6 +132,75 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             _globalTrends.value = if (data != null) UiState.Success(data)
                                   else UiState.Error("Failed to load global trends")
         }
+    }
+
+    // ── Ready to Trade ─────────────────────────────────────────────────────────
+    private val _readyToTradeResults = MutableStateFlow<UiState<List<StockData>>>(UiState.Loading)
+    val readyToTradeResults: StateFlow<UiState<List<StockData>>> = _readyToTradeResults
+
+    private val _readyToTradeProgress = MutableStateFlow<Pair<Int, Int>?>(null)
+    val readyToTradeProgress: StateFlow<Pair<Int, Int>?> = _readyToTradeProgress
+
+    fun scanReadyToTrade(capital: Double, category: ScanCategory, orbBreakoutMode: Boolean = false) {
+        _capital.value = capital
+        viewModelScope.launch {
+            _readyToTradeResults.value = UiState.Loading
+            _readyToTradeProgress.value = null
+
+            repo.scanAffordableStocks(capital, category).fold(
+                onSuccess = { phase1List ->
+                    // "Ready to Trade" (orbBreakoutMode): pick stocks that are moving
+                    // positively today but haven't already made their big move, AND are
+                    // still sitting near their day high right now (momentum still active).
+                    // Avoids chasing stocks that spiked at 9:30 AM and then faded.
+                    //
+                    //   changePct in 0.5..5.0  — green but not overextended
+                    //   ltp ≥ dayHigh × 0.97   — within 3% of day high = still running
+                    //
+                    // "Ready for Breakouts" keeps the plain score-based sort.
+                    val top20 = if (orbBreakoutMode)
+                        phase1List
+                            .filter { it.changePct in 0.5..5.0 }
+                            .filter { it.dayHigh > 0 && it.ltp >= it.dayHigh * 0.97 }
+                            .sortedByDescending { it.score }
+                            .take(20)
+                    else
+                        phase1List.sortedByDescending { it.score }.take(20)
+                    if (top20.isEmpty()) {
+                        _readyToTradeResults.value = UiState.Success(emptyList())
+                        return@fold
+                    }
+                    val stockMap = ConcurrentHashMap(top20.associateBy { it.symbol })
+                    val done = AtomicInteger(0)
+                    _readyToTradeProgress.value = 0 to top20.size
+
+                    coroutineScope {
+                        top20.map { stock ->
+                            async {
+                                val enriched = kotlinx.coroutines.withTimeoutOrNull(45_000L) {
+                                    repo.analyseStockFromPhase1(stock, orbBreakoutMode = orbBreakoutMode).getOrNull()
+                                } ?: stock
+                                stockMap[enriched.symbol] = enriched
+                                _readyToTradeProgress.value = done.incrementAndGet() to top20.size
+                                // Sort: BUY first, then WAIT, then AVOID
+                                _readyToTradeResults.value = UiState.Success(
+                                    stockMap.values.sortedWith(compareBy { quickTakeRank(it) })
+                                )
+                            }
+                        }.awaitAll()
+                    }
+                    _readyToTradeProgress.value = null
+                },
+                onFailure = { _readyToTradeResults.value = UiState.Error(it.message ?: "Scan failed") },
+            )
+        }
+    }
+
+    private fun quickTakeRank(stock: StockData): Int = when {
+        stock.quickTake?.action?.startsWith("Buy", ignoreCase = true) == true  -> 0
+        stock.quickTake?.action?.startsWith("Avoid", ignoreCase = true) == true -> 2
+        stock.quickTake != null -> 1
+        else -> 3
     }
 
     fun scanStocks(capital: Double, category: ScanCategory) {

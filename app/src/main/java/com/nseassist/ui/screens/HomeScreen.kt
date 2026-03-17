@@ -126,16 +126,21 @@ fun HomeScreen(navController: NavController, vm: MainViewModel) {
                     androidx.compose.runtime.LaunchedEffect(Unit) { vm.loadGlobalTrends() }
                     MarketTrendTab(trendsState, onRetry = vm::refreshGlobalTrends)
                 }
-                HomeTab.Capital -> CapitalInputCard(
-                    capital = capital,
-                    category = currentCategory,
-                    onCapitalChange = { capital = it },
-                    onCategoryChange = { selectedCategory = it.routeValue },
-                    onScan = {
-                        val amt = capital.toDoubleOrNull() ?: 0.0
-                        if (amt > 0) navController.navigate("scan/$amt/${currentCategory.routeValue}")
-                    },
-                )
+                HomeTab.Capital -> {
+                    var scanMode by remember { mutableStateOf("normal") }
+                    CapitalInputCard(
+                        capital = capital,
+                        category = currentCategory,
+                        scanMode = scanMode,
+                        onCapitalChange = { capital = it },
+                        onCategoryChange = { selectedCategory = it.routeValue },
+                        onScanModeChange = { scanMode = it },
+                        onScan = {
+                            val amt = capital.toDoubleOrNull() ?: 0.0
+                            if (amt > 0) navController.navigate("scan/$amt/${currentCategory.routeValue}/$scanMode")
+                        },
+                    )
+                }
                 HomeTab.Search -> StockSearchCard(
                     query = stockQuery,
                     onQueryChange = { stockQuery = it.uppercase() },
@@ -317,10 +322,15 @@ private fun StockSearchCard(query: String, onQueryChange: (String) -> Unit, onSe
 private fun CapitalInputCard(
     capital: String,
     category: ScanCategory,
+    scanMode: String,
     onCapitalChange: (String) -> Unit,
     onCategoryChange: (ScanCategory) -> Unit,
+    onScanModeChange: (String) -> Unit,
     onScan: () -> Unit,
 ) {
+    val isBreakouts = scanMode == "breakouts"
+    val isReadyToTrade = scanMode == "trade"
+
     Card(colors = CardDefaults.cardColors(containerColor = CardDark), modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text("Today's Capital", fontWeight = FontWeight.Bold, fontSize = 16.sp, color = TextPrimary)
@@ -346,14 +356,94 @@ private fun CapitalInputCard(
                 }
             }
             Text(category.helperText, color = TextSecondary, fontSize = 12.sp)
+
+            // ── Ready for Breakouts toggle ────────────────────────────────────
+            ScanModeToggle(
+                title = "Ready for Breakouts",
+                description = if (isBreakouts)
+                    "Top 20 stocks — full Phase 2 analysis · score-based BUY signals"
+                else
+                    "Deep scan: BUY where score ≥ 65, above VWAP, bullish candle",
+                checked = isBreakouts,
+                onCheckedChange = { onScanModeChange(if (it) "breakouts" else "normal") },
+                activeColor = BluePrimary,
+            )
+
+            // ── Ready to Trade toggle (real-time resistance breakout) ──────────
+            ScanModeToggle(
+                title = "Ready to Trade",
+                description = if (isReadyToTrade)
+                    "Top 20 — BUY on 30-day resistance breakout OR score ≥ 65, above VWAP"
+                else
+                    "Real-time resistance breakout · works all day, not just mornings",
+                checked = isReadyToTrade,
+                onCheckedChange = { onScanModeChange(if (it) "trade" else "normal") },
+                activeColor = GreenBull,
+            )
+
             Button(
                 onClick = onScan,
                 enabled = (capital.toDoubleOrNull() ?: 0.0) > 0,
                 modifier = Modifier.fillMaxWidth(),
-                colors = ButtonDefaults.buttonColors(containerColor = BluePrimary, contentColor = Color.White),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = when (scanMode) {
+                        "trade"     -> GreenBull
+                        "breakouts" -> BluePrimary
+                        else        -> BluePrimary
+                    },
+                    contentColor = Color.White,
+                ),
             ) {
-                Text("Scan Affordable Stocks", fontWeight = FontWeight.Bold)
+                Text(
+                    when (scanMode) {
+                        "trade"     -> "Find Ready to Trade Stocks"
+                        "breakouts" -> "Find Breakout Stocks"
+                        else        -> "Scan Affordable Stocks"
+                    },
+                    fontWeight = FontWeight.Bold,
+                )
             }
+        }
+    }
+}
+
+@Composable
+private fun ScanModeToggle(
+    title: String,
+    description: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+    activeColor: Color,
+) {
+    Surface(
+        shape = RoundedCornerShape(10.dp),
+        color = if (checked) activeColor.copy(alpha = 0.10f) else SurfaceDark,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 14.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    title,
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 14.sp,
+                    color = if (checked) activeColor else TextPrimary,
+                )
+                Text(description, color = TextSecondary, fontSize = 11.sp)
+            }
+            Switch(
+                checked = checked,
+                onCheckedChange = onCheckedChange,
+                colors = SwitchDefaults.colors(
+                    checkedThumbColor = activeColor,
+                    checkedTrackColor = activeColor.copy(alpha = 0.3f),
+                ),
+            )
         }
     }
 }
