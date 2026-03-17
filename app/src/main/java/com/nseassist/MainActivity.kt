@@ -49,10 +49,11 @@ fun AppNavHost(navController: NavHostController, vm: MainViewModel) {
         composable("home") {
             HomeScreen(navController, vm)
         }
-        composable("scan/{capital}/{category}") { backStackEntry ->
+        composable("scan/{capital}/{category}/{scanMode}") { backStackEntry ->
             val capital = backStackEntry.arguments?.getString("capital")?.toDoubleOrNull() ?: 0.0
             val category = ScanCategory.fromRouteValue(backStackEntry.arguments?.getString("category"))
-            ScanScreen(navController, capital, category, vm)
+            val scanMode = backStackEntry.arguments?.getString("scanMode") ?: "normal"
+            ScanScreen(navController, capital, category, vm, scanMode)
         }
         composable("stock/{symbol}") { backStackEntry ->
             val symbol = backStackEntry.arguments?.getString("symbol") ?: ""

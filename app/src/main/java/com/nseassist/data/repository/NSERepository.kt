@@ -231,8 +231,8 @@ class NSERepository {
             val adxResult              = indicators.adx(highs, lows, closes)
             val candleResult           = indicators.detectCandlePattern(history.map { it.open }, highs, lows, closes)
 
-            val support    = lows.takeLast(20).minOrNull()  ?: 0.0
-            val resistance = highs.takeLast(20).maxOrNull() ?: 0.0
+            val resistance = indicators.swingHighResistance(highs)
+            val support    = indicators.swingLowSupport(lows)
 
             val trend  = trendDetector.detect(closes, volumes.map { it.toLong() })
             val trend6M = indicators.trend6Month(closes)
@@ -403,7 +403,7 @@ class NSERepository {
     //   ✅ Profile is cached     — only fetched once per session per stock
     //   ✅ NIFTY is cached       — fetched once, shared across all 15 Phase-2 stocks
     //
-    suspend fun analyseStockFromPhase1(phase1: StockData, fetchNews: Boolean = false): Result<StockData> =
+    suspend fun analyseStockFromPhase1(phase1: StockData, fetchNews: Boolean = false, orbBreakoutMode: Boolean = false): Result<StockData> =
         withContext(Dispatchers.IO) {
             runCatching {
                 val cleanSymbol = phase1.symbol.removeSuffix(".NS")
@@ -560,7 +560,7 @@ class NSERepository {
                 val score  = (scorer.score(stockData, marketCondition) + newsImpact).coerceIn(0.0, 100.0)
                 val option = scorer.optionAction(stockData)
                 val enriched = stockData.copy(score = score, optionAction = option, newsImpactScore = newsImpact)
-                val quickTake = generateQuickTake(enriched, thirtyMinCandle, pivots, supertrend30m?.signal ?: "NEUTRAL")
+                val quickTake = generateQuickTake(enriched, thirtyMinCandle, pivots, supertrend30m?.signal ?: "NEUTRAL", orbBreakoutMode)
                 enriched.copy(quickTake = quickTake)
             }
         }
@@ -668,6 +668,7 @@ class NSERepository {
         thirtyMinCandle: TechnicalIndicators.CandlePattern?,
         pivots: TechnicalIndicators.PivotPoints?,
         supertrendSignal: String,
+        orbBreakoutMode: Boolean = false,
     ): QuickTake {
         fun fmt(v: Double) = "₹${String.format("%,.2f", v)}"
         fun pct(v: Double) = String.format("%.1f", v)
@@ -676,14 +677,17 @@ class NSERepository {
         val atr = stock.atr.coerceAtLeast(ltp * 0.005)
 
         // ── SITUATION ────────────────────────────────────────────────────────
+        val threeCandle = thirtyMinCandle != null &&
+                thirtyMinCandle.type in listOf("MORNING_STAR", "EVENING_STAR")
+        val candleSpan = if (threeCandle) "45-min" else "15-min"
         val patternDesc = when {
             thirtyMinCandle != null && thirtyMinCandle.type != "NONE" -> when (thirtyMinCandle.signal) {
                 TechnicalIndicators.CandleSignal.BULLISH ->
-                    "The last 15-min candle shows a ${thirtyMinCandle.type.lowercase().replace("_", " ")} — buyers are stepping in."
+                    "The last $candleSpan candle shows a ${thirtyMinCandle.type.lowercase().replace("_", " ")} — buyers are stepping in."
                 TechnicalIndicators.CandleSignal.BEARISH ->
-                    "The last 15-min candle shows a ${thirtyMinCandle.type.lowercase().replace("_", " ")} — sellers are taking over."
+                    "The last $candleSpan candle shows a ${thirtyMinCandle.type.lowercase().replace("_", " ")} — sellers are taking over."
                 else ->
-                    "The last 15-min candle is a Doji — price is undecided right now."
+                    "The last $candleSpan candle is a Doji — price is undecided right now."
             }
             stock.aboveVwap -> "Price is above the day's average (VWAP) — buyers are in control."
             else            -> "Price is below the day's average (VWAP) — sellers have the upper hand."
@@ -691,7 +695,13 @@ class NSERepository {
         val headline = "${stock.name} is at ${fmt(ltp)}. $patternDesc"
 
         // ── ACTION ────────────────────────────────────────────────────────────
-        val isBullish = stock.optionAction in listOf("STRONG BUY", "POSSIBLE BUY") &&
+        // Resistance breakout: price just crossed above the 30-day swing high resistance.
+        // The 5% freshness cap ensures we don't flag stocks that broke out days ago.
+        val hasResistanceBreakout = orbBreakoutMode &&
+                stock.resistance > 0 &&
+                ltp > stock.resistance &&
+                ltp <= stock.resistance * 1.05   // fresh — within 5% above resistance
+        val isBullish = ((stock.optionAction in listOf("STRONG BUY", "POSSIBLE BUY")) || hasResistanceBreakout) &&
                         (thirtyMinCandle?.signal != TechnicalIndicators.CandleSignal.BEARISH) &&
                         stock.aboveVwap
         val isBearish = stock.optionAction == "AVOID" ||
@@ -705,6 +715,7 @@ class NSERepository {
         val stopPct     = kotlin.math.abs(entryPrice - stopPrice) / entryPrice * 100
 
         val action = when {
+            hasResistanceBreakout && isBullish -> "Buy — Resistance breakout above ${fmt(stock.resistance)}"
             isBullish -> "Buy above ${fmt(entryPrice)}"
             isBearish -> "Avoid buying — wait for the selling to stop first"
             else      -> "Wait — no clear signal yet. Watch if price crosses ${fmt(ltp + atr * 0.15)}"
@@ -728,6 +739,7 @@ class NSERepository {
             else -> ""
         }
         val orbDesc = when {
+            hasResistanceBreakout -> "Price broke above 30-day swing resistance (${fmt(stock.resistance)}) — real-time breakout."
             stock.orbHigh > 0 && ltp > stock.orbHigh -> "Price broke above the morning range (ORB: ${fmt(stock.orbHigh)}) — strong signal."
             stock.orbLow  > 0 && ltp < stock.orbLow  -> "Price fell below the morning range (ORB: ${fmt(stock.orbLow)}) — bearish signal."
             else -> ""
@@ -765,7 +777,7 @@ class NSERepository {
         // ── 15-MIN SUMMARY ────────────────────────────────────────────────────
         val stDesc = when (supertrendSignal) { "BUY" -> " Supertrend: BUY." "SELL" -> " Supertrend: SELL." else -> "" }
         val thirtyMinSummary = buildString {
-            append("Last 15-min: ")
+            append("Last $candleSpan: ")
             if (thirtyMinCandle != null && thirtyMinCandle.type != "NONE") append("${thirtyMinCandle.label}. ")
             append(if (stock.aboveVwap) "Above VWAP — momentum UP." else "Below VWAP — momentum DOWN.")
             append(stDesc)

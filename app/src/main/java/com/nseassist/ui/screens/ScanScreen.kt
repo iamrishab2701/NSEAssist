@@ -48,25 +48,43 @@ fun ScanScreen(
     capital: Double,
     category: ScanCategory,
     vm: MainViewModel,
+    scanMode: String = "normal",
 ) {
     val context = LocalContext.current
     val aiSettings by vm.aiSettings.collectAsState()
     val scanState by vm.scanResults.collectAsState()
+    val rttState by vm.readyToTradeResults.collectAsState()
     val exportState by vm.exportState.collectAsState()
     val deepEnrichProgress by vm.deepEnrichProgress.collectAsState()
+    val rttProgress by vm.readyToTradeProgress.collectAsState()
     val scorer = remember { StockScorer() }
     var currentPage by remember(category, capital) { mutableIntStateOf(0) }
     var searchQuery by remember(category, capital) { mutableStateOf("") }
     var sortOption by remember { mutableStateOf(ScanSortOption.SCORE) }
     var showProviderPicker by remember { mutableStateOf(false) }
 
-    LaunchedEffect(capital, category) { vm.scanStocks(capital, category) }
+    val isDeepScan = scanMode == "breakouts" || scanMode == "trade"
+    LaunchedEffect(capital, category, scanMode) {
+        when (scanMode) {
+            "trade"     -> vm.scanReadyToTrade(capital, category, orbBreakoutMode = true)
+            "breakouts" -> vm.scanReadyToTrade(capital, category, orbBreakoutMode = false)
+            else        -> vm.scanStocks(capital, category)
+        }
+    }
 
     AppGradientBackground {
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("${category.label} Stocks  ·  ₹${String.format("%,.0f", capital)}") },
+                title = {
+                    Text(
+                        when (scanMode) {
+                            "trade"     -> "Ready to Trade  ·  ₹${String.format("%,.0f", capital)}"
+                            "breakouts" -> "Breakouts  ·  ₹${String.format("%,.0f", capital)}"
+                            else        -> "${category.label} Stocks  ·  ₹${String.format("%,.0f", capital)}"
+                        }
+                    )
+                },
                 navigationIcon = {
                     IconButton(onClick = { navController.popBackStack() }) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back")
@@ -77,14 +95,28 @@ fun ScanScreen(
         },
         containerColor = Color.Transparent,
     ) { padding ->
-        when (val state = scanState) {
+        val activeState = if (isDeepScan) rttState else scanState
+        when (val state = activeState) {
             is UiState.Loading -> Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    CircularProgressIndicator(color = BluePrimary)
-                    Text("Scanning NSE market…", color = TextSecondary, fontWeight = FontWeight.SemiBold)
-                    Text("Phase 1 — Fetching all liquid stocks from Yahoo Finance", color = TextSecondary, fontSize = 12.sp)
-                    Text("Phase 2 — Full RSI · EMA · MACD · ADX analysis on top picks", color = TextSecondary, fontSize = 12.sp)
-                    Text("Takes ~5–10 seconds to show results", color = TextSecondary, fontSize = 11.sp)
+                    CircularProgressIndicator(color = if (scanMode == "trade") GreenBull else BluePrimary)
+                    Text(
+                        when (scanMode) {
+                            "trade"     -> "Finding Ready to Trade stocks…"
+                            "breakouts" -> "Finding Breakout stocks…"
+                            else        -> "Scanning NSE market…"
+                        },
+                        color = TextSecondary, fontWeight = FontWeight.SemiBold,
+                    )
+                    if (isDeepScan) {
+                        Text("Phase 1 — Picking top 20 candidates", color = TextSecondary, fontSize = 12.sp)
+                        Text("Phase 2 — Full RSI · EMA · MACD · Candles · Quick Take on all 20", color = TextSecondary, fontSize = 12.sp)
+                        Text("Takes ~1–2 minutes · Results appear stock by stock", color = TextSecondary, fontSize = 11.sp)
+                    } else {
+                        Text("Phase 1 — Fetching all liquid stocks from Yahoo Finance", color = TextSecondary, fontSize = 12.sp)
+                        Text("Phase 2 — Full RSI · EMA · MACD · ADX analysis on top picks", color = TextSecondary, fontSize = 12.sp)
+                        Text("Takes ~5–10 seconds to show results", color = TextSecondary, fontSize = 11.sp)
+                    }
                 }
             }
             is UiState.Error -> Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
@@ -96,7 +128,13 @@ fun ScanScreen(
                     Text("⚠️", fontSize = 40.sp)
                     Text(state.message, color = RedBear, fontSize = 13.sp)
                     Button(
-                        onClick = { vm.scanStocks(capital, category) },
+                        onClick = {
+                            when (scanMode) {
+                                "trade"     -> vm.scanReadyToTrade(capital, category, orbBreakoutMode = true)
+                                "breakouts" -> vm.scanReadyToTrade(capital, category, orbBreakoutMode = false)
+                                else        -> vm.scanStocks(capital, category)
+                            }
+                        },
                         colors = ButtonDefaults.buttonColors(containerColor = BluePrimary, contentColor = Color.White),
                     ) {
                         Text("Retry", fontWeight = FontWeight.Bold)
@@ -105,6 +143,38 @@ fun ScanScreen(
             }
             is UiState.Success -> {
                 val stocks = state.data
+                if (isDeepScan) {
+                    // ── Deep scan mode (Breakouts / Ready to Trade) — top 20, BUY first ──
+                    LazyColumn(
+                        modifier = Modifier.fillMaxSize().padding(padding),
+                        contentPadding = PaddingValues(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        item {
+                            rttProgress?.let { (done, total) ->
+                                ReadyToTradeBanner(
+                                    done = done,
+                                    total = total,
+                                    label = if (scanMode == "trade") "Scanning for ORB breakouts + signals…" else "Deep analysing top 20 stocks…",
+                                )
+                            } ?: Text(
+                                "Top ${stocks.size} stocks — fully analysed · BUY signals first",
+                                color = TextSecondary, fontSize = 12.sp,
+                            )
+                        }
+                        if (stocks.isEmpty()) {
+                            item {
+                                Text("No stocks found. Try a different stock type or capital.", color = TextSecondary, fontSize = 12.sp)
+                            }
+                        }
+                        items(stocks) { stock ->
+                            ReadyToTradeRow(stock) {
+                                navController.navigate("stock/${stock.symbol}")
+                            }
+                        }
+                    }
+                } else {
+                // ── Regular scan mode ─────────────────────────────────────────
                 val filteredStocks = stocks
                     .filter { stock ->
                         val query = searchQuery.trim()
@@ -139,11 +209,8 @@ fun ScanScreen(
                             color = TextSecondary, fontSize = 12.sp,
                         )
                     }
-                    // Phase 2 deep-enrich progress banner — shown while top 15 are being analysed
                     deepEnrichProgress?.let { (done, total) ->
-                        item {
-                            DeepEnrichBanner(done = done, total = total)
-                        }
+                        item { DeepEnrichBanner(done = done, total = total) }
                     }
                     item {
                         AnalyzeWithAiCard(
@@ -199,6 +266,7 @@ fun ScanScreen(
                         }
                     }
                 }
+                } // end regular scan
 
                 if (showProviderPicker) {
                     ProviderPickerDialog(
@@ -410,6 +478,120 @@ private fun PaginationHeader(
             }
             OutlinedButton(onClick = onNext, enabled = currentPage < pageCount - 1) {
                 Text("Next")
+            }
+        }
+    }
+}
+
+@Composable
+private fun ReadyToTradeBanner(done: Int, total: Int, label: String = "Deep analysing top $total stocks…") {
+    val progress = if (total > 0) done.toFloat() / total else 0f
+    Surface(
+        shape = RoundedCornerShape(10.dp),
+        color = GreenBull.copy(alpha = 0.08f),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    "🔍  $label",
+                    color = GreenBull,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Text("$done / $total", color = TextSecondary, fontSize = 11.sp)
+            }
+            LinearProgressIndicator(
+                progress = { progress },
+                modifier = Modifier.fillMaxWidth(),
+                color = GreenBull,
+                trackColor = GreenBull.copy(alpha = 0.15f),
+            )
+            Text(
+                "RSI · EMA · MACD · Candles · Supertrend · Quick Take",
+                color = TextSecondary,
+                fontSize = 10.sp,
+            )
+        }
+    }
+}
+
+@Composable
+private fun ReadyToTradeRow(stock: StockData, onClick: () -> Unit) {
+    val action = stock.quickTake?.action ?: ""
+    val isBuy   = action.startsWith("Buy", ignoreCase = true)
+    val isAvoid = action.startsWith("Avoid", ignoreCase = true)
+    val isWait  = !isBuy && !isAvoid && stock.quickTake != null
+
+    val accentColor = when {
+        isBuy   -> GreenBull
+        isAvoid -> RedBear
+        isWait  -> AmberWarn
+        else    -> TextSecondary
+    }
+    val badgeLabel = when {
+        isBuy   -> "BUY"
+        isAvoid -> "AVOID"
+        isWait  -> "WAIT"
+        else    -> "—"
+    }
+
+    Card(
+        colors = CardDefaults.cardColors(containerColor = CardDark),
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
+        shape = RoundedCornerShape(12.dp),
+    ) {
+        Row(modifier = Modifier.height(IntrinsicSize.Min)) {
+            Box(
+                modifier = Modifier
+                    .width(4.dp)
+                    .fillMaxHeight()
+                    .background(accentColor),
+            )
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(horizontal = 14.dp, vertical = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(stock.symbol, fontWeight = FontWeight.Bold, fontSize = 15.sp, color = TextPrimary)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            String.format("%+.2f%%", stock.changePct),
+                            color = if (stock.changePct >= 0) GreenBull else RedBear,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                        )
+                        Surface(shape = RoundedCornerShape(6.dp), color = accentColor.copy(alpha = 0.15f)) {
+                            Text(
+                                badgeLabel,
+                                color = accentColor,
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                            )
+                        }
+                    }
+                }
+                Text("₹${String.format("%,.2f", stock.ltp)}", color = TextPrimary, fontSize = 13.sp)
+                if (action.isNotBlank()) {
+                    Text(action, color = accentColor, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                }
+                stock.quickTake?.confidence?.let { conf ->
+                    Text("Confidence: $conf%  ·  ${stock.sessionPhase}", color = TextSecondary, fontSize = 11.sp)
+                }
             }
         }
     }

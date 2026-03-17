@@ -280,6 +280,43 @@ class TechnicalIndicators {
         }
     }
 
+    // ── Swing High Resistance / Swing Low Support (30-day daily bars) ────────
+    //
+    // A swing high is a bar whose high is strictly greater than the highs of
+    // 'lookback' bars on each side.  We scan the last 'bars' daily candles
+    // (excluding the most-recent bar, which may be today's partial intraday
+    // data) and return the highest qualifying swing high.
+    //
+    // Used by "Ready to Trade" mode to detect real-time resistance breakouts:
+    //   ltp > swingHighResistance  AND  ltp ≤ resistance * 1.05  → fresh breakout
+    //
+    fun swingHighResistance(highs: List<Double>, lookback: Int = 2, bars: Int = 30): Double {
+        // Drop the last bar (today's partial) and take the preceding 'bars' candles
+        val window = highs.dropLast(1).takeLast(bars)
+        if (window.size < lookback * 2 + 1) return window.maxOrNull() ?: 0.0
+        val swingHighs = mutableListOf<Double>()
+        for (i in lookback until window.size - lookback) {
+            val h = window[i]
+            if ((1..lookback).all { j -> h > window[i - j] && h > window[i + j] }) {
+                swingHighs.add(h)
+            }
+        }
+        return swingHighs.maxOrNull() ?: window.maxOrNull() ?: 0.0
+    }
+
+    fun swingLowSupport(lows: List<Double>, lookback: Int = 2, bars: Int = 30): Double {
+        val window = lows.dropLast(1).takeLast(bars)
+        if (window.size < lookback * 2 + 1) return window.minOrNull() ?: 0.0
+        val swingLows = mutableListOf<Double>()
+        for (i in lookback until window.size - lookback) {
+            val l = window[i]
+            if ((1..lookback).all { j -> l < window[i - j] && l < window[i + j] }) {
+                swingLows.add(l)
+            }
+        }
+        return swingLows.minOrNull() ?: window.minOrNull() ?: 0.0
+    }
+
     // ── Pivot Points (Standard) ───────────────────────────────────────────────
     fun pivotPoints(prevHigh: Double, prevLow: Double, prevClose: Double): PivotPoints {
         val cpp = (prevHigh + prevLow + prevClose) / 3.0
