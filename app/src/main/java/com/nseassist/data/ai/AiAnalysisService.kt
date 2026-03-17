@@ -782,7 +782,7 @@ Rules:
 - Use all available signals holistically — not just one indicator.
 - Candle patterns, Bollinger position, ADX strength, and news together should inform quality of setup.
 - Confidence must be an integer from 0 to 100.
-- Keep rationale concise and beginner-friendly.
+- Keep rationale, entry_view, stop_loss, and target in plain English a beginner can understand. No jargon like "pullback to support", "resistance breakout confirmation", or "EMA structure". Instead say: "buy when price dips to around Rs X", "your profit target is Rs X", "if price falls below Rs X, exit immediately".
         """
 
         // ── Single-stock system prompt — strict GO / NO-GO verdict ────────────────
@@ -811,11 +811,11 @@ NON-NEGOTIABLE RULES:
 - quantity = floor(capital / entry_midpoint), then reduced so max_loss = quantity * (entry - stop_loss) <= 2% of capital.
 - rr_ratio must be "1 : X.X" calculated as (target - entry) / (entry - stop_loss). Must be >= 1.5 for GO.
 - confidence is 0-100 based on ALL signals holistically. Not just one indicator.
-- reason is EXACTLY 2 lines maximum. Only technical facts. No speculation. No generic statements.
-- risk is exactly 1 sentence — one specific thing that would invalidate this setup. Not a generic warning.
+- reason is EXACTLY 2 lines maximum. Write in plain simple English a beginner can understand — no trading jargon. Say what the stock is doing and why it looks like a good trade.
+- risk is exactly 1 sentence. Write in plain English. Say exactly what price level would mean the trade is not working and what to do.
 - For NO-GO: still provide entry/target/stop_loss as "N/A", quantity as 0, rr_ratio as "N/A".
 - Use ONLY the data provided. Never invent prices, levels, or signals not in the input.
-- Keep language simple and beginner-friendly.
+- PLAIN ENGLISH RULE: Write reason and risk as if explaining to someone who has never traded before. No terms like "VWAP", "EMA structure", "RSI overbought", "pullback to support", "institutional participation". Instead say things like: "the stock is above today's average price", "trading volume is 2x higher than usual", "the stock has been rising for 2 days", "if price falls below Rs X, exit immediately".
 
 Return ONLY valid JSON — no markdown, no explanation, no extra text:
 {
@@ -827,8 +827,8 @@ Return ONLY valid JSON — no markdown, no explanation, no extra text:
   "quantity": 12,
   "rr_ratio": "1 : 2.4",
   "confidence": 78,
-  "reason": "Price above VWAP with RSI at 58 in sweet spot and EMA20 > EMA50 bullish structure. Volume spike of 2.1x confirms institutional participation in the move.",
-  "risk": "Exit immediately if price closes a 15-minute candle below Rs 840 — that would break the VWAP support and invalidate the setup.",
+  "reason": "The stock is above today's average price and has been rising steadily for 2 days. Today's trading volume is 2x higher than usual, meaning big buyers are active.",
+  "risk": "If price falls below Rs 835, exit immediately — that means the trade is no longer working.",
   "disclaimer": "AI suggestions are informational only and not SEBI-registered financial advice."
 }
         """
