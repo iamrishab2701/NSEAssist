@@ -49,10 +49,13 @@ android {
             firebaseAppDistribution {
                 releaseNotes = """v${appVersionName} — What's new:
 
-• Paper Trades — GO verdicts now logged and visible; outcome buttons (Target Hit / SL Hit / Expired) working
-• Auto-resolve — open trades auto-check current price vs target & SL each time Performance screen opens
-• AI Audit — rebuilt with stats per AI provider (GO/NO-GO counts, win rate, confidence breakdown)
-• Clear all — confirmation dialog before deleting all trades/audit entries
+• Refresh button on stock detail — re-fetches Phase 1 + Phase 2 fresh, bypasses scan cache
+• Refresh bug fix — refresh from Ready to Trade/Breakouts now always fetches live data (not stale scan results)
+• Refresh on scan screens — Ready to Trade & Ready for Breakouts re-run full scan on refresh
+• Paper Trades — GO verdicts logged; outcome buttons (Target Hit / SL Hit / Expired) working
+• Auto-resolve — open trades auto-check current price vs target & SL on Performance screen open
+• AI Audit — stats per AI provider (GO/NO-GO counts, win rate, confidence breakdown)
+• Clear all — confirmation dialog before deleting
 • Bug fix — getTrades crash on null outcome_price (JsonNull) resolved"""
                 groups       = "testers"
             }
