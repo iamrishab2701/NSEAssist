@@ -49,11 +49,10 @@ android {
             firebaseAppDistribution {
                 releaseNotes = """v${appVersionName} — What's new:
 
-• Paper Trade Memory — log AI picks as paper trades, track outcomes (win/loss/open) via Performance screen
-• Signal Replay — backtest RSI/VWAP/MACD signals on 90-day history for any deep-enriched stock
-• Global Trends v2 — Indian ADRs section (INFY/WIPRO/HDFCBANK/ICICIBANK/DRREDDY/TATAMOTORS) with overnight US moves; Crude Oil & Gold impact cards; STRONG/MODERATE correlation badges
-• News — expanded to 22 RSS sources, 12h intraday window (was 24h), stronger sentiment keywords
-• Log Paper Trade button on AI Report primary pick"""
+• Ready for Breakouts — deep scan of top 20 stocks, BUY where score ≥ 65, above VWAP, bullish 15-min candle
+• Ready to Trade — real-time 30-day swing resistance breakout detection; picks stocks still near day high (not morning spikers); action shows "Buy — Resistance breakout above ₹X"
+• Swing High/Low — support & resistance now computed from 30-day swing highs/lows (lookback=2) instead of simple 20-day max/min
+• Stock detail cache reduced to 45 sec — re-searching a stock always fetches fresh intraday price"""
                 groups       = "testers"
             }
         }
