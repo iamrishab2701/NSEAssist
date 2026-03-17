@@ -73,6 +73,18 @@ class NSERepository {
         }
     }
 
+    // ── Price lookup (used by auto-resolve) ───────────────────────────────────
+
+    /** Fetches current LTP for a list of symbols (no .NS suffix needed).
+     *  Returns map of symbol → price. Missing symbols are simply absent from the map. */
+    suspend fun fetchCurrentPrices(symbols: List<String>): Map<String, Double> =
+        withContext(Dispatchers.IO) {
+            if (symbols.isEmpty()) return@withContext emptyMap()
+            val nsSymbols = symbols.map { "${it.removeSuffix(".NS")}.NS" }
+            val quotes    = YahooFinanceClient.getBatchQuotes(nsSymbols)
+            quotes.associate { it.symbol.removeSuffix(".NS") to it.price }
+        }
+
     // ── Stock Scan ────────────────────────────────────────────────────────────
 
     suspend fun scanAffordableStocks(capital: Double, category: ScanCategory): Result<List<StockData>> =

@@ -1627,9 +1627,15 @@ async function handleMemory(pathname, request, env) {
       }), { headers: corsHeaders() });
     }
 
-    // ── DELETE /memory/cleanup — manual cleanup trigger ───────────────────────
+    // ── DELETE /memory/cleanup — manual cleanup trigger (>6 months) ──────────
     if (pathname === "/memory/cleanup" && request.method === "DELETE") {
       await cleanupOldData(env);
+      return new Response(JSON.stringify({ ok: true }), { headers: corsHeaders() });
+    }
+
+    // ── DELETE /memory/clear-all — delete all paper trades ───────────────────
+    if (pathname === "/memory/clear-all" && request.method === "DELETE") {
+      await env.DB.prepare("DELETE FROM paper_trades").run();
       return new Response(JSON.stringify({ ok: true }), { headers: corsHeaders() });
     }
 

@@ -90,11 +90,12 @@ object MemoryClient {
                         reason       = o.get("reason")?.asString ?: "",
                         loggedAt     = o.get("logged_at")?.asLong ?: 0L,
                         outcome      = o.get("outcome")?.asString ?: "OPEN",
-                        outcomePrice = o.get("outcome_price")?.asDouble,
+                        outcomePrice = o.get("outcome_price")?.takeIf { !it.isJsonNull }?.asDouble,
                     )
                 }
             }
-        }.getOrElse { emptyList() }
+        }.onSuccess { list -> Log.d(TAG, "getTrades returned ${list.size} entries") }
+         .getOrElse { e -> Log.w(TAG, "getTrades failed: ${e.message}", e); emptyList() }
     }
 
     suspend fun updateTradeOutcome(id: Int, outcome: String, outcomePrice: Double?) =
@@ -198,6 +199,16 @@ object MemoryClient {
                 }.getOrNull()
             }
         }
+
+    suspend fun clearAllTrades() = withContext(Dispatchers.IO) {
+        runCatching {
+            val request = Request.Builder()
+                .url("$WORKER_URL/memory/clear-all")
+                .delete()
+                .build()
+            client.newCall(request).execute().use { }
+        }.onFailure { Log.w(TAG, "clearAllTrades failed: ${it.message}") }
+    }
 
     suspend fun triggerCleanup() = withContext(Dispatchers.IO) {
         runCatching {
