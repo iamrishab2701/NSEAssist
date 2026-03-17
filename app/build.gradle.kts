@@ -49,10 +49,11 @@ android {
             firebaseAppDistribution {
                 releaseNotes = """v${appVersionName} — What's new:
 
-• Ready for Breakouts — deep scan of top 20 stocks, BUY where score ≥ 65, above VWAP, bullish 15-min candle
-• Ready to Trade — real-time 30-day swing resistance breakout detection; picks stocks still near day high (not morning spikers); action shows "Buy — Resistance breakout above ₹X"
-• Swing High/Low — support & resistance now computed from 30-day swing highs/lows (lookback=2) instead of simple 20-day max/min
-• Stock detail cache reduced to 45 sec — re-searching a stock always fetches fresh intraday price"""
+• Paper Trades — GO verdicts now logged and visible; outcome buttons (Target Hit / SL Hit / Expired) working
+• Auto-resolve — open trades auto-check current price vs target & SL each time Performance screen opens
+• AI Audit — rebuilt with stats per AI provider (GO/NO-GO counts, win rate, confidence breakdown)
+• Clear all — confirmation dialog before deleting all trades/audit entries
+• Bug fix — getTrades crash on null outcome_price (JsonNull) resolved"""
                 groups       = "testers"
             }
         }
