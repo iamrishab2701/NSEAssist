@@ -719,9 +719,26 @@ class NSERepository {
         val isBearish = stock.optionAction == "AVOID" ||
                         thirtyMinCandle?.signal == TechnicalIndicators.CandleSignal.BEARISH
 
-        val entryPrice  = if (isBullish) ltp + atr * 0.1 else ltp - atr * 0.1
-        val targetPrice = if (isBullish) ltp + atr * 1.2 else ltp - atr * 1.2
-        val stopPrice   = if (isBullish) ltp - atr * 0.6 else ltp + atr * 0.6
+        val entryPrice = if (isBullish) ltp + atr * 0.1 else ltp - atr * 0.1
+        val atrTarget  = ltp + atr * 1.2
+        val atrStop    = ltp - atr * 0.6
+
+        // Use pivot R1 as target if it's above LTP and reachable today (within 8%)
+        // Use pivot R2 if LTP has already crossed R1
+        // Fallback to ATR-based target when pivots are unavailable or too far away
+        val targetPrice = when {
+            isBullish && pivots != null && pivots.r1 > ltp && pivots.r1 <= ltp * 1.08 -> pivots.r1
+            isBullish && pivots != null && ltp >= pivots.r1 && pivots.r2 > ltp        -> pivots.r2
+            isBullish -> atrTarget
+            else      -> ltp - atr * 1.2
+        }
+
+        // Use S1 as stop only when it sits between the ATR stop and LTP (valid support zone)
+        val stopPrice = when {
+            isBullish && pivots != null && pivots.s1 in atrStop..ltp -> pivots.s1
+            isBullish -> atrStop
+            else      -> ltp + atr * 0.6
+        }
 
         val targetPct   = (targetPrice - entryPrice) / entryPrice * 100
         val stopPct     = kotlin.math.abs(entryPrice - stopPrice) / entryPrice * 100

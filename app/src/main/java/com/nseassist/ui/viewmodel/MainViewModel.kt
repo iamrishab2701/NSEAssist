@@ -361,6 +361,24 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         scanStocks(capital, category)
     }
 
+    /** Force a fresh stock detail fetch — bypasses ALL caches including Phase 2 scan results. */
+    fun refreshStockDetail(symbol: String) {
+        detailCacheTimestamp = 0L
+        detailCacheSymbol    = ""
+        _stockNews.value     = UiState.Loading
+        viewModelScope.launch {
+            _stockDetail.value   = UiState.Loading
+            detailCacheSymbol    = symbol
+            detailCacheTimestamp = System.currentTimeMillis()
+            val result = repo.analyseStock(symbol, fetchNews = false)
+            _stockDetail.value = result.fold(
+                onSuccess = { UiState.Success(it) },
+                onFailure = { UiState.Error(it.message ?: "Analysis failed") },
+            )
+            result.getOrNull()?.let { loadNewsForStock(it) }
+        }
+    }
+
     fun clearAiAnalysis() {
         _aiAnalysis.value = null
     }
