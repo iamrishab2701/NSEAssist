@@ -108,26 +108,24 @@ class AiAnalysisService {
         val rawResponse = callProvider(config, SINGLE_STOCK_SYSTEM_PROMPT, prompt)
         val result = parseSingleStockReport(rawResponse, config)
 
-        // Auto-log recommendation (fire-and-forget)
+        // Auto-log every verdict to AI Audit (fire-and-forget)
         launch {
-            if (result.verdict == "GO") {
-                runCatching {
-                    MemoryClient.logPaperTrade(PaperTradeRequest(
-                        symbol       = stock.symbol,
-                        companyName  = stock.name,
-                        direction    = result.direction,
-                        entryPrice   = stock.ltp,
-                        targetText   = result.target,
-                        stopLossText = result.stopLoss,
-                        quantity     = result.quantity,
-                        sessionPhase = stock.sessionPhase,
-                        aiProvider   = config.provider.label,
-                        confidence   = result.confidence,
-                        verdict      = result.verdict,
-                        rrRatio      = result.rrRatio,
-                        reason       = result.reason.take(200),
-                    ))
-                }
+            runCatching {
+                MemoryClient.logPaperTrade(PaperTradeRequest(
+                    symbol       = stock.symbol,
+                    companyName  = stock.name,
+                    direction    = result.direction,
+                    entryPrice   = if (result.verdict == "GO") stock.ltp else 0.0,
+                    targetText   = result.target,
+                    stopLossText = result.stopLoss,
+                    quantity     = result.quantity,
+                    sessionPhase = stock.sessionPhase,
+                    aiProvider   = config.provider.label,
+                    confidence   = result.confidence,
+                    verdict      = result.verdict,   // "GO" or "NO-GO"
+                    rrRatio      = result.rrRatio,
+                    reason       = result.reason.take(200),
+                ))
             }
         }
 

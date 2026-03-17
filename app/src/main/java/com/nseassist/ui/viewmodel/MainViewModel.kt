@@ -486,20 +486,73 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** Load all logged trades from Cloudflare D1. */
+    /** Load all logged trades from Cloudflare D1, then auto-resolve any open GO trades
+     *  whose current price has hit their target or stop loss. */
     fun loadTrades() {
         viewModelScope.launch {
             _trades.value = UiState.Loading
             val list = MemoryClient.getTrades()
-            _trades.value = UiState.Success(list)
+
+            // Auto-resolve: only GO/BATCH trades that still have an entry price and target/SL text
+            val openGo = list.filter {
+                it.outcome == "OPEN" &&
+                (it.verdict == "GO" || it.verdict == "AI_BATCH") &&
+                it.entryPrice > 0 &&
+                it.targetText.isNotBlank() &&
+                it.stopLossText.isNotBlank()
+            }
+
+            if (openGo.isEmpty()) {
+                _trades.value = UiState.Success(list)
+                return@launch
+            }
+
+            // Fetch current prices for the symbols (best-effort — failures just skip that trade)
+            val prices = repo.fetchCurrentPrices(openGo.map { it.symbol }.distinct())
+
+            // Determine outcomes without blocking the UI
+            val resolved = mutableMapOf<Int, Pair<String, Double>>() // id → (outcome, ltp)
+            openGo.forEach { trade ->
+                val ltp    = prices[trade.symbol]            ?: return@forEach
+                val target = parsePriceFromText(trade.targetText)  ?: return@forEach
+                val sl     = parsePriceFromText(trade.stopLossText) ?: return@forEach
+                when {
+                    ltp >= target -> resolved[trade.id] = "TARGET_HIT" to ltp
+                    ltp <= sl     -> resolved[trade.id] = "SL_HIT"     to ltp
+                }
+            }
+
+            // Persist to D1 (sequential — typically 0–3 trades, fast)
+            resolved.forEach { (id, outcomeAndLtp) ->
+                MemoryClient.updateTradeOutcome(id, outcomeAndLtp.first, outcomeAndLtp.second)
+            }
+
+            // Merge resolved outcomes into the in-memory list (no second network fetch needed)
+            val finalList = list.map { trade ->
+                val r = resolved[trade.id]
+                if (r != null) trade.copy(outcome = r.first, outcomePrice = r.second) else trade
+            }
+            _trades.value = UiState.Success(finalList)
         }
     }
+
+    /** Parses the first price number from strings like "Rs 795 (+3.6%)" or "₹1,105 (-2.3%)". */
+    private fun parsePriceFromText(text: String): Double? =
+        Regex("[0-9,]+\\.?[0-9]*").find(text)?.value?.replace(",", "")?.toDoubleOrNull()
 
     /** Update the outcome of a logged trade (e.g. TARGET_HIT / SL_HIT). */
     fun updateTradeOutcome(id: Int, outcome: String, outcomePrice: Double?) {
         viewModelScope.launch {
             MemoryClient.updateTradeOutcome(id, outcome, outcomePrice)
             loadTrades()   // refresh list
+        }
+    }
+
+    /** Delete all paper trades and AI audit entries. */
+    fun clearAllTrades() {
+        viewModelScope.launch {
+            MemoryClient.clearAllTrades()
+            loadTrades()
         }
     }
 

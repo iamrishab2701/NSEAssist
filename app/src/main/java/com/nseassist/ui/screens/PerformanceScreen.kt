@@ -16,6 +16,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.DeleteSweep
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -28,6 +31,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -35,6 +39,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -64,9 +69,30 @@ import java.util.Locale
 @Composable
 fun PerformanceScreen(navController: NavController, vm: MainViewModel) {
     val tradesState by vm.trades.collectAsState()
-    var selectedTab by remember { mutableIntStateOf(0) }
+    var selectedTab   by remember { mutableIntStateOf(0) }
+    var showClearDialog by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) { vm.loadTrades() }
+
+    if (showClearDialog) {
+        AlertDialog(
+            onDismissRequest = { showClearDialog = false },
+            title = { Text("Clear all entries?") },
+            text  = { Text("This will permanently delete all Paper Trades and AI Audit entries. This cannot be undone.") },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showClearDialog = false
+                        vm.clearAllTrades()
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = RedBear),
+                ) { Text("Clear All") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showClearDialog = false }) { Text("Cancel") }
+            },
+        )
+    }
 
     AppGradientBackground {
         Scaffold(
@@ -79,8 +105,8 @@ fun PerformanceScreen(navController: NavController, vm: MainViewModel) {
                         }
                     },
                     actions = {
-                        IconButton(onClick = { vm.triggerMemoryCleanup() }) {
-                            Icon(Icons.Default.DeleteSweep, contentDescription = "Clear old data (>6 months)", tint = TextSecondary)
+                        IconButton(onClick = { showClearDialog = true }) {
+                            Icon(Icons.Default.DeleteSweep, contentDescription = "Clear all entries", tint = TextSecondary)
                         }
                     },
                     colors = TopAppBarDefaults.topAppBarColors(containerColor = CardDark),
@@ -113,7 +139,7 @@ fun PerformanceScreen(navController: NavController, vm: MainViewModel) {
                     is UiState.Success -> {
                         val all = state.data
                         when (selectedTab) {
-                            0 -> PaperTradesTab(trades = all.filter { it.verdict != "AI_BATCH" }, vm = vm)
+                            0 -> PaperTradesTab(trades = all.filter { it.verdict == "GO" }, vm = vm)
                             1 -> AiAuditTab(trades = all)
                         }
                     }
@@ -237,31 +263,65 @@ private fun OutcomeButton(label: String, color: androidx.compose.ui.graphics.Col
 private fun AiAuditTab(trades: List<PaperTradeEntry>) {
     if (trades.isEmpty()) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Text("No AI recommendations logged yet.\nRecommendations are auto-logged on every AI call.", color = TextSecondary, fontSize = 13.sp)
+            Text(
+                "No AI recommendations logged yet.\nRecommendations are auto-logged on every AI call.",
+                color = TextSecondary, fontSize = 13.sp,
+            )
         }
         return
     }
 
-    // Group by provider for win rate per provider
-    val byProvider = trades.filter { it.outcome != "OPEN" }.groupBy { it.aiProvider }
+    val goTrades     = trades.filter { it.verdict == "GO" || it.verdict == "AI_BATCH" }
+    val noGoTrades   = trades.filter { it.verdict == "NO-GO" }
+    val closedGo     = goTrades.filter { it.outcome != "OPEN" }
+    val wins         = closedGo.count { it.outcome == "TARGET_HIT" }
+    val winRate      = if (closedGo.isNotEmpty()) (wins.toDouble() / closedGo.size * 100).toInt() else 0
+    val winRateColor = if (winRate >= 60) GreenBull else if (winRate >= 40) AmberWarn else RedBear
+
+    // Provider breakdown — only for closed GO/BATCH trades
+    val byProvider = goTrades.filter { it.outcome != "OPEN" }.groupBy { it.aiProvider }
 
     LazyColumn(
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        // Provider breakdown
+        // Summary card
+        item {
+            Card(colors = CardDefaults.cardColors(containerColor = CardDark), modifier = Modifier.fillMaxWidth()) {
+                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text("AI Audit Summary", fontWeight = FontWeight.Bold, color = TextPrimary)
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        StatBadge("Total", "${trades.size}", TextPrimary)
+                        StatBadge("GO", "${goTrades.size}", GreenBull)
+                        StatBadge("NO-GO", "${noGoTrades.size}", RedBear)
+                        StatBadge("Win Rate", if (closedGo.isEmpty()) "—" else "$winRate%", winRateColor)
+                    }
+                    if (closedGo.isEmpty()) {
+                        Text(
+                            "Win rate appears once you mark outcomes on GO trades.",
+                            color = TextSecondary, fontSize = 11.sp,
+                        )
+                    }
+                }
+            }
+        }
+
+        // Provider win rates (only when there are closed trades)
         if (byProvider.isNotEmpty()) {
             item {
                 Card(colors = CardDefaults.cardColors(containerColor = CardDark), modifier = Modifier.fillMaxWidth()) {
                     Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text("Provider Win Rates", fontWeight = FontWeight.Bold, color = TextPrimary)
                         byProvider.forEach { (provider, provTrades) ->
-                            val wins = provTrades.count { it.outcome == "TARGET_HIT" }
-                            val rate = (wins.toDouble() / provTrades.size * 100).toInt()
-                            val rateColor = if (rate >= 60) GreenBull else if (rate >= 40) AmberWarn else RedBear
+                            val provWins = provTrades.count { it.outcome == "TARGET_HIT" }
+                            val rate     = (provWins.toDouble() / provTrades.size * 100).toInt()
+                            val color    = if (rate >= 60) GreenBull else if (rate >= 40) AmberWarn else RedBear
                             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                                 Text(provider.ifBlank { "Unknown" }, color = TextPrimary, fontSize = 13.sp)
-                                Text("$wins/${provTrades.size}  ($rate%)", color = rateColor, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                                Text(
+                                    "$provWins/${provTrades.size}  ($rate%)",
+                                    color = color, fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
+                                )
                             }
                         }
                     }
@@ -269,9 +329,9 @@ private fun AiAuditTab(trades: List<PaperTradeEntry>) {
             }
         }
 
-        // All recommendations chronologically
+        // All recommendations newest first
         item { Text("All Recommendations", color = TextSecondary, fontSize = 12.sp) }
-        items(trades) { trade ->
+        items(trades.sortedByDescending { it.loggedAt }) { trade ->
             AuditCard(trade)
         }
     }
@@ -279,30 +339,86 @@ private fun AiAuditTab(trades: List<PaperTradeEntry>) {
 
 @Composable
 private fun AuditCard(trade: PaperTradeEntry) {
+    val isGo      = trade.verdict == "GO" || trade.verdict == "AI_BATCH"
+    val isBatch   = trade.verdict == "AI_BATCH"
+
+    val verdictColor = if (isGo) GreenBull else RedBear
+    val verdictLabel = when (trade.verdict) {
+        "AI_BATCH" -> "BATCH"
+        "NO-GO"    -> "NO-GO"
+        else       -> "GO"
+    }
+
     val outcomeColor = when (trade.outcome) {
         "TARGET_HIT" -> GreenBull
         "SL_HIT"     -> RedBear
         "EXPIRED"    -> TextSecondary
         else         -> AmberWarn
     }
+
     Card(
         colors = CardDefaults.cardColors(containerColor = CardDark),
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(10.dp),
     ) {
-        Row(
-            modifier = Modifier.padding(14.dp).fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                Text(trade.symbol, fontWeight = FontWeight.Bold, color = TextPrimary, fontSize = 14.sp)
-                Text("${trade.direction}  ·  ${trade.aiProvider.ifBlank { "AI" }}  ·  conf ${trade.confidence}", color = TextSecondary, fontSize = 11.sp)
-                Text(formatTimestamp(trade.loggedAt), color = TextSecondary.copy(alpha = 0.6f), fontSize = 10.sp)
+        Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+            // Header row: symbol + verdict badge
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                Column {
+                    Text(trade.symbol, fontWeight = FontWeight.Bold, color = TextPrimary, fontSize = 14.sp)
+                    if (trade.companyName.isNotBlank()) {
+                        Text(trade.companyName, color = TextSecondary, fontSize = 11.sp)
+                    }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                    // Source label
+                    Text(
+                        if (isBatch) "Batch AI" else "Single",
+                        color = TextSecondary.copy(alpha = 0.7f), fontSize = 10.sp,
+                    )
+                    // Verdict badge
+                    Surface(shape = RoundedCornerShape(4.dp), color = verdictColor.copy(alpha = 0.15f)) {
+                        Text(
+                            verdictLabel, color = verdictColor, fontSize = 11.sp,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+                        )
+                    }
+                }
             }
-            Surface(shape = RoundedCornerShape(4.dp), color = outcomeColor.copy(alpha = 0.15f)) {
-                Text(trade.outcome, color = outcomeColor, fontSize = 11.sp,
-                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp))
+
+            // Direction + provider + confidence
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                if (isGo && trade.direction.isNotBlank() && trade.direction != "SKIP") {
+                    val dirColor = if (trade.direction == "BUY") GreenBull else RedBear
+                    Text(trade.direction, color = dirColor, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                }
+                Text(
+                    "${trade.aiProvider.ifBlank { "AI" }}  ·  conf ${trade.confidence}",
+                    color = TextSecondary, fontSize = 12.sp,
+                )
+            }
+
+            // Target / SL (only for GO trades with data)
+            if (isGo && trade.targetText.isNotBlank()) {
+                Text("Target: ${trade.targetText}  |  SL: ${trade.stopLossText}", color = TextSecondary, fontSize = 11.sp)
+            }
+
+            // Reason for NO-GO
+            if (!isGo && trade.reason.isNotBlank()) {
+                Text(trade.reason, color = TextSecondary, fontSize = 11.sp, maxLines = 2)
+            }
+
+            // Footer: timestamp + outcome badge for GO trades
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                Text(formatTimestamp(trade.loggedAt), color = TextSecondary.copy(alpha = 0.6f), fontSize = 10.sp)
+                if (isGo) {
+                    Surface(shape = RoundedCornerShape(4.dp), color = outcomeColor.copy(alpha = 0.15f)) {
+                        Text(
+                            trade.outcome, color = outcomeColor, fontSize = 11.sp,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+                        )
+                    }
+                }
             }
         }
     }
