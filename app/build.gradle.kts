@@ -49,11 +49,14 @@ android {
             firebaseAppDistribution {
                 releaseNotes = """v${appVersionName} — What's new:
 
-• Morning Selloff scan — finds stocks down ≥4% with heavy selling volume (≥50% avg daily) and below VWAP
-• Works 9:15 AM–12:00 PM IST on weekdays — potential bounce candidates
-• Stock Type filter auto-disabled in Morning Selloff mode (scans all caps)
-• Developer Settings — test mode toggle to bypass Morning Selloff time restriction
-• Capital filter applied after screener — shows only stocks you can afford"""
+• In-app session logger — view all network calls, navigation events, and scan activity in real time (Settings → Logs)
+• Upstox data source support — connect your Upstox account via OAuth2 for live market data
+• Data & AI Settings screen — unified screen to configure data source, Upstox credentials, and AI provider keys
+• Bug fix: scan cache added for Ready to Trade, ORB, and Morning Selloff modes — no more re-scan on back navigation
+• Bug fix: stock detail no longer triggers duplicate deep analysis on back navigation
+• Bug fix: SL Hit and Target Hit now require entering the actual exit price via a dialog — no more ₹0.0 outcomes
+• Bug fix: global trends refresh button throttled to once per 5 seconds — prevents accidental duplicate API calls
+• Bug fix: market overview screener fetched once instead of twice on app start"""
                 groups       = "testers"
             }
         }
