@@ -49,9 +49,11 @@ android {
             firebaseAppDistribution {
                 releaseNotes = """v${appVersionName} — What's new:
 
-• Plain English — AI analysis Entry/Stop Loss/Target now explained in simple language, no trading jargon
-• Plain English — QuickTake on stock detail screen uses beginner-friendly explanations
-• No more terms like 'pullback', 'oversold', 'pivot' — everything explained as clear actions"""
+• Morning Selloff scan — finds stocks down ≥4% with heavy selling volume (≥50% avg daily) and below VWAP
+• Works 9:15 AM–12:00 PM IST on weekdays — potential bounce candidates
+• Stock Type filter auto-disabled in Morning Selloff mode (scans all caps)
+• Developer Settings — test mode toggle to bypass Morning Selloff time restriction
+• Capital filter applied after screener — shows only stocks you can afford"""
                 groups       = "testers"
             }
         }
