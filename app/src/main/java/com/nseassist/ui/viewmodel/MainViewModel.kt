@@ -63,6 +63,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     val globalTrends: StateFlow<UiState<GlobalTrendsData>> = _globalTrends
     private var lastTrendsRefreshTime: Long = 0L
     private val TRENDS_REFRESH_COOLDOWN = 5_000L // 5 seconds between manual refreshes
+    private var trendsLoadStarted = false  // true once first load has been kicked off
 
     // ── Stock News — loaded independently so technical data shows instantly ───────
     private val _stockNews = MutableStateFlow<UiState<NewsResult?>>(UiState.Loading)
@@ -136,6 +137,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private var detailCacheSymbol:    String = ""
     private var detailCacheTimestamp: Long   = 0L
     private val DETAIL_CACHE_TTL = 45_000L // 45 sec — fast for AI-report back-nav, forces re-fetch on re-search
+    // Tracks in-flight symbol to block duplicate fetches that slip past the state check
+    private var detailFetchInFlightSymbol: String? = null
 
     init {
         // Apply persisted data source + credentials to repo immediately on start
@@ -229,11 +232,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun loadGlobalTrends() {
-        // Skip if already loaded (cached) — user can force refresh via the Refresh button
-        if (_globalTrends.value is UiState.Success) {
-            AppLogger.d("MARKET", "Global trends cache hit — skipping fetch")
+        // Skip if already loaded or if a fetch has already been kicked off (prevents duplicate
+        // fetches from multiple LaunchedEffect fires before the first request completes)
+        if (_globalTrends.value is UiState.Success || trendsLoadStarted) {
+            AppLogger.d("MARKET", "Global trends cache hit or in-flight — skipping fetch")
             return
         }
+        trendsLoadStarted = true
         viewModelScope.launch {
             _globalTrends.value = UiState.Loading
             val data = GlobalTrendsClient.fetchGlobalTrends()
@@ -541,26 +546,29 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
 
         // Priority 2: same stock re-opened within TTL — serve instantly.
-        // Also matches UiState.Loading (fetch already in-flight) so a second
-        // LaunchedEffect fire while the first request is still running doesn't
-        // kick off a duplicate analyseStock call.
+        // Also catches: in-flight fetch (detailFetchInFlightSymbol) OR state already Loading/Success.
+        // The explicit in-flight symbol check handles the race window where the coroutine hasn't
+        // yet set _stockDetail.value = UiState.Loading when a second synchronous call arrives.
+        val inFlight = detailFetchInFlightSymbol == symbol
         val cached = symbol == detailCacheSymbol &&
                      (now - detailCacheTimestamp) < DETAIL_CACHE_TTL &&
-                     (_stockDetail.value is UiState.Success || _stockDetail.value is UiState.Loading)
+                     (_stockDetail.value is UiState.Success || _stockDetail.value is UiState.Loading || inFlight)
         if (cached) {
             val ageS = (now - detailCacheTimestamp) / 1000
-            AppLogger.d("SCAN", "Detail cache hit (back-nav) — $symbol age=${ageS}s")
+            AppLogger.d("SCAN", "Detail cache hit (back-nav) — $symbol age=${ageS}s inFlight=$inFlight")
             (_stockDetail.value as? UiState.Success)?.data?.let { loadNewsForStock(it) }
             return
         }
 
         // Priority 3: fresh network fetch (stock NOT in Phase 2 top-15)
         AppLogger.d("SCAN", "Detail fetch — $symbol (not in Phase 2 cache)")
-        detailCacheSymbol    = symbol
-        detailCacheTimestamp = now
+        detailCacheSymbol         = symbol
+        detailCacheTimestamp      = now
+        detailFetchInFlightSymbol = symbol   // set BEFORE coroutine to block any same-frame duplicate
         viewModelScope.launch {
             _stockDetail.value = UiState.Loading
             val result = repo.analyseStock(symbol, fetchNews = false)  // technical only — fast
+            detailFetchInFlightSymbol = null   // clear after fetch completes or fails
             _stockDetail.value = result.fold(
                 onSuccess = { UiState.Success(it) },
                 onFailure = { UiState.Error(it.message ?: "Analysis failed") }
@@ -633,14 +641,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Force a fresh stock detail fetch — bypasses ALL caches including Phase 2 scan results. */
     fun refreshStockDetail(symbol: String) {
-        detailCacheTimestamp = 0L
-        detailCacheSymbol    = ""
-        _stockNews.value     = UiState.Loading
+        detailCacheTimestamp      = 0L
+        detailCacheSymbol         = ""
+        detailFetchInFlightSymbol = symbol
+        _stockNews.value          = UiState.Loading
         viewModelScope.launch {
             _stockDetail.value   = UiState.Loading
             detailCacheSymbol    = symbol
             detailCacheTimestamp = System.currentTimeMillis()
             val result = repo.analyseStock(symbol, fetchNews = false)
+            detailFetchInFlightSymbol = null
             _stockDetail.value = result.fold(
                 onSuccess = { UiState.Success(it) },
                 onFailure = { UiState.Error(it.message ?: "Analysis failed") },

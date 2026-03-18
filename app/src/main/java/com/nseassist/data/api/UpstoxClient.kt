@@ -1,6 +1,7 @@
 package com.nseassist.data.api
 
 import com.google.gson.JsonParser
+import com.google.gson.stream.JsonReader
 import com.nseassist.util.AppLogger
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -12,7 +13,6 @@ import com.nseassist.util.AppLoggingInterceptor
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
-import java.io.BufferedReader
 import java.io.ByteArrayInputStream
 import java.io.IOException
 import java.io.InputStreamReader
@@ -51,7 +51,7 @@ object UpstoxClient {
     private const val TAG              = "UpstoxClient"
     private const val BASE_URL         = "https://api.upstox.com"
     private const val INSTRUMENTS_URL  =
-        "https://assets.upstox.com/market-assets/instruments/v1/complete.csv.gz"
+        "https://assets.upstox.com/market-quote/instruments/exchange/NSE.json.gz"
     private const val REDIRECT_URI     = "http://127.0.0.1"
 
     // In-memory cache: NSE trading symbol → Upstox instrument_key
@@ -100,8 +100,10 @@ object UpstoxClient {
         val responseBody = httpClient.newCall(request).await()
         val json = JsonParser.parseString(responseBody).asJsonObject
 
+        // Upstox v2 success response has no "status" field — it directly returns
+        // the token payload. "status" is only present on error responses.
         val status = json.get("status")?.asString
-        if (status != "success") {
+        if (status != null && status != "success") {
             val msg = json.get("message")?.asString
                 ?: json.get("error_description")?.asString
                 ?: "Token exchange failed (status=$status)"
@@ -124,38 +126,42 @@ object UpstoxClient {
         try {
             val request = Request.Builder()
                 .url(INSTRUMENTS_URL)
+                // Upstox CDN blocks okhttp's default User-Agent — spoof a browser UA
+                .addHeader("User-Agent", "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Mobile Safari/537.36")
                 .build()
 
             val bytes = httpClient.newCall(request).awaitBytes()
-
-            // The file is gzip-compressed; decompress manually
-            val reader = BufferedReader(
-                InputStreamReader(GZIPInputStream(ByteArrayInputStream(bytes)))
-            )
-
-            var header: List<String>? = null
             var count = 0
 
-            reader.useLines { lines ->
-                lines.forEach { line ->
-                    val cols = line.split(",")
-                    if (header == null) {
-                        header = cols
-                        return@forEach
+            // Stream-parse JSON to avoid loading the full ~25 MB into memory at once
+            JsonReader(InputStreamReader(GZIPInputStream(ByteArrayInputStream(bytes)))).use { reader ->
+                reader.beginArray()
+                while (reader.hasNext()) {
+                    var segment: String? = null
+                    var instrType: String? = null
+                    var instrKey: String? = null
+                    var tradingSym: String? = null
+
+                    reader.beginObject()
+                    while (reader.hasNext()) {
+                        when (reader.nextName()) {
+                            "segment"         -> segment   = reader.nextString()
+                            "instrument_type" -> instrType = reader.nextString()
+                            "instrument_key"  -> instrKey  = reader.nextString()
+                            "trading_symbol"  -> tradingSym = reader.nextString()
+                            else              -> reader.skipValue()
+                        }
                     }
-                    val h = header ?: return@forEach
-                    if (cols.size < h.size) return@forEach
+                    reader.endObject()
 
-                    val instrKey     = cols.getOrNull(h.indexOf("instrument_key"))  ?: return@forEach
-                    val tradingSym   = cols.getOrNull(h.indexOf("tradingsymbol"))   ?: return@forEach
-                    val instrType    = cols.getOrNull(h.indexOf("instrument_type")) ?: return@forEach
-
-                    // Only NSE equity (not F&O, not currency, not commodity)
-                    if (instrType.trim() == "EQ" && instrKey.trim().startsWith("NSE_EQ|")) {
+                    // Only NSE equity stocks
+                    if (segment == "NSE_EQ" && instrType == "EQ" &&
+                        instrKey != null && tradingSym != null) {
                         instrumentKeyMap[tradingSym.trim()] = instrKey.trim()
                         count++
                     }
                 }
+                reader.endArray()
             }
 
             instrumentsLoaded = true
