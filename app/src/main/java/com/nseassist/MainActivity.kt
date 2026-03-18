@@ -14,15 +14,18 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import com.nseassist.data.model.ScanCategory
+import androidx.compose.runtime.DisposableEffect
 import com.nseassist.ui.screens.AboutAppScreen
 import com.nseassist.ui.screens.AiReportScreen
 import com.nseassist.ui.screens.HomeScreen
+import com.nseassist.ui.screens.LogViewerScreen
 import com.nseassist.ui.screens.ModelConfigScreen
 import com.nseassist.ui.screens.PerformanceScreen
 import com.nseassist.ui.screens.ScanScreen
 import com.nseassist.ui.screens.StockDetailScreen
 import com.nseassist.ui.theme.NSEAssistTheme
 import com.nseassist.ui.viewmodel.MainViewModel
+import com.nseassist.util.AppLogger
 
 class MainActivity : ComponentActivity() {
 
@@ -45,6 +48,21 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 fun AppNavHost(navController: NavHostController, vm: MainViewModel) {
+    // Track navigation events in the in-app logger
+    DisposableEffect(navController) {
+        val listener = androidx.navigation.NavController.OnDestinationChangedListener { _, dest, args ->
+            val route = dest.route ?: "unknown"
+            val label = when {
+                route.startsWith("stock/") -> "Stock Detail: ${args?.getString("symbol")}"
+                route.startsWith("scan/")  -> "Scan: cap=${args?.getString("capital")} cat=${args?.getString("category")}"
+                else -> route
+            }
+            AppLogger.i("NAV", "→ $label")
+        }
+        navController.addOnDestinationChangedListener(listener)
+        onDispose { navController.removeOnDestinationChangedListener(listener) }
+    }
+
     NavHost(navController = navController, startDestination = "home") {
         composable("home") {
             HomeScreen(navController, vm)
@@ -70,6 +88,9 @@ fun AppNavHost(navController: NavHostController, vm: MainViewModel) {
         }
         composable("performance") {
             PerformanceScreen(navController, vm)
+        }
+        composable("logs") {
+            LogViewerScreen(navController)
         }
     }
 }

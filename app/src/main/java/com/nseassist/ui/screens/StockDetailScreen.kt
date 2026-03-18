@@ -223,7 +223,7 @@ private fun SingleStockAiSheet(
 
                     if (configuredProviders.isEmpty()) {
                         Text(
-                            "No AI provider configured.\nGo to Settings → Model Configuration to add an API key.",
+                            "No AI provider configured.\nGo to Settings → Data & AI Settings to add an API key.",
                             color = TextSecondary,
                             fontSize = 13.sp,
                             lineHeight = 20.sp,

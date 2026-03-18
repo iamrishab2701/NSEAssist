@@ -1,6 +1,6 @@
 package com.nseassist.data.api
 
-import android.util.Log
+import com.nseassist.util.AppLogger
 import com.google.gson.Gson
 import com.google.gson.JsonParser
 import com.nseassist.data.model.PaperTradeEntry
@@ -13,6 +13,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import okhttp3.MediaType.Companion.toMediaType
+import com.nseassist.util.AppLoggingInterceptor
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
@@ -29,6 +30,7 @@ object MemoryClient {
         .connectTimeout(8, TimeUnit.SECONDS)
         .readTimeout(8, TimeUnit.SECONDS)
         .callTimeout(10, TimeUnit.SECONDS)
+        .addInterceptor(AppLoggingInterceptor())
         .build()
 
     suspend fun logPaperTrade(trade: PaperTradeRequest): Int? = withContext(Dispatchers.IO) {
@@ -59,7 +61,7 @@ object MemoryClient {
                 JsonParser.parseString(response.body?.string() ?: "{}").asJsonObject
                     .get("id")?.asInt
             }
-        }.getOrNull().also { if (it == null) Log.w(TAG, "logPaperTrade failed") }
+        }.getOrNull().also { if (it == null) AppLogger.w("TRADE", "logPaperTrade failed for ${trade.symbol}") }
     }
 
     suspend fun getTrades(symbol: String? = null): List<PaperTradeEntry> = withContext(Dispatchers.IO) {
@@ -94,8 +96,8 @@ object MemoryClient {
                     )
                 }
             }
-        }.onSuccess { list -> Log.d(TAG, "getTrades returned ${list.size} entries") }
-         .getOrElse { e -> Log.w(TAG, "getTrades failed: ${e.message}", e); emptyList() }
+        }.onSuccess { list -> AppLogger.d("TRADE", "getTrades returned ${list.size} entries") }
+         .getOrElse { e -> AppLogger.e("TRADE", "getTrades failed: ${e.message}"); emptyList() }
     }
 
     suspend fun updateTradeOutcome(id: Int, outcome: String, outcomePrice: Double?) =
@@ -109,7 +111,7 @@ object MemoryClient {
                     .method("PATCH", body.toRequestBody(JSON))
                     .build()
                 client.newCall(request).execute().use { }
-            }.onFailure { Log.w(TAG, "updateTradeOutcome failed: ${it.message}") }
+            }.onFailure { AppLogger.e("TRADE", "updateTradeOutcome #$id failed: ${it.message}") }
         }
 
     suspend fun logSignalOutcomes(outcomes: List<SignalOutcomeRequest>) = withContext(Dispatchers.IO) {
@@ -137,7 +139,7 @@ object MemoryClient {
                 .post(body.toRequestBody(JSON))
                 .build()
             client.newCall(request).execute().use { }
-        }.onFailure { Log.w(TAG, "logSignalOutcomes failed: ${it.message}") }
+        }.onFailure { AppLogger.e("TRADE", "logSignalOutcomes failed (${outcomes.size} outcomes): ${it.message}") }
     }
 
     suspend fun logPrediction(req: PredictionLogRequest) = withContext(Dispatchers.IO) {
@@ -157,7 +159,7 @@ object MemoryClient {
                 .post(body.toRequestBody(JSON))
                 .build()
             client.newCall(request).execute().use { }
-        }.onFailure { Log.w(TAG, "logPrediction failed: ${it.message}") }
+        }.onFailure { AppLogger.e("TRADE", "logPrediction failed for ${req.symbol}: ${it.message}") }
     }
 
     suspend fun getAiContext(symbol: String): StockAiContext? =
@@ -207,7 +209,7 @@ object MemoryClient {
                 .delete()
                 .build()
             client.newCall(request).execute().use { }
-        }.onFailure { Log.w(TAG, "clearAllTrades failed: ${it.message}") }
+        }.onFailure { AppLogger.e("TRADE", "clearAllTrades failed: ${it.message}") }
     }
 
     suspend fun triggerCleanup() = withContext(Dispatchers.IO) {
@@ -217,6 +219,6 @@ object MemoryClient {
                 .delete()
                 .build()
             client.newCall(request).execute().use { }
-        }.onFailure { Log.w(TAG, "triggerCleanup failed: ${it.message}") }
+        }.onFailure { AppLogger.e("TRADE", "triggerCleanup failed: ${it.message}") }
     }
 }

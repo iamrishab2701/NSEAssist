@@ -15,6 +15,7 @@ import okhttp3.Cookie
 import okhttp3.CookieJar
 import okhttp3.HttpUrl
 import okhttp3.MediaType.Companion.toMediaType
+import com.nseassist.util.AppLoggingInterceptor
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
@@ -74,6 +75,7 @@ object YahooFinanceClient {
         .connectTimeout(10, TimeUnit.SECONDS)
         .readTimeout(30,    TimeUnit.SECONDS)
         .callTimeout(35,    TimeUnit.SECONDS)
+        .addInterceptor(AppLoggingInterceptor())
         .build()
 
     // ── Cookie store — domain-aware (handles .yahoo.com cross-subdomain) ────
@@ -125,6 +127,7 @@ object YahooFinanceClient {
         .connectTimeout(8,  TimeUnit.SECONDS)
         .readTimeout(15,    TimeUnit.SECONDS)
         .callTimeout(20,    TimeUnit.SECONDS)
+        .addInterceptor(AppLoggingInterceptor())
         .build()
 
     // ── API-specific client (adds Yahoo Referer/Origin headers) ──────────────

@@ -1,6 +1,8 @@
 package com.nseassist.data.ai
 
 import com.google.gson.Gson
+import com.nseassist.util.AppLoggingInterceptor
+import com.nseassist.util.AppLogger
 import com.google.gson.JsonObject
 import com.google.gson.JsonParser
 import com.nseassist.data.api.MemoryClient
@@ -37,6 +39,7 @@ class AiAnalysisService {
         .connectTimeout(20, TimeUnit.SECONDS)
         .readTimeout(120, TimeUnit.SECONDS)
         .callTimeout(180, TimeUnit.SECONDS)
+        .addInterceptor(AppLoggingInterceptor())
         .build()
 
     // ── Batch multi-stock analysis (AI Report screen) ─────────────────────────────
@@ -49,6 +52,7 @@ class AiAnalysisService {
     ): Result<AiAnalysisReport> = withContext(Dispatchers.IO) { runCatching {
         require(config.apiKey.isNotBlank()) { "API key missing for ${config.provider.label}" }
         require(stocks.isNotEmpty()) { "No stocks available for AI analysis" }
+        AppLogger.d("AI", "Batch analysis — ${config.provider.label} model=${config.model} stocks=${stocks.size} capital=₹$capital category=${category.routeValue}")
 
         // Fetch historical context for top 5 candidates in parallel (4 s timeout each)
         val topSymbols = stocks.sortedByDescending { it.score }.take(5).map { it.symbol }
@@ -63,6 +67,7 @@ class AiAnalysisService {
         val prompt = buildBatchPrompt(capital, category, stocks, contextMap)
         val rawResponse = callProvider(config, SYSTEM_PROMPT, prompt)
         val report = parseReport(rawResponse, config)
+        AppLogger.d("AI", "Batch done — primary pick: ${report.primaryPick.symbol} ${report.primaryPick.direction} confidence=${report.primaryPick.confidence}%")
 
         // Auto-log primary pick recommendation (fire-and-forget)
         launch {
@@ -100,6 +105,7 @@ class AiAnalysisService {
         news: NewsResult?,
     ): Result<SingleStockAiAnalysis> = withContext(Dispatchers.IO) { runCatching {
         require(config.apiKey.isNotBlank()) { "API key missing for ${config.provider.label}" }
+        AppLogger.d("AI", "Single-stock — ${config.provider.label} ${stock.symbol} LTP=₹${stock.ltp}")
 
         // Fetch historical context for this stock (4 s timeout, non-blocking on failure)
         val context = MemoryClient.getAiContext(stock.symbol)
@@ -107,6 +113,7 @@ class AiAnalysisService {
         val prompt = buildSingleStockPrompt(capital, stock, news, context)
         val rawResponse = callProvider(config, SINGLE_STOCK_SYSTEM_PROMPT, prompt)
         val result = parseSingleStockReport(rawResponse, config)
+        AppLogger.d("AI", "Single-stock done — ${stock.symbol} verdict=${result.verdict} direction=${result.direction} confidence=${result.confidence}%")
 
         // Auto-log every verdict to AI Audit (fire-and-forget)
         launch {
