@@ -1,12 +1,15 @@
 package com.nseassist.data.repository
 
-import android.util.Log
+import com.nseassist.util.AppLogger
 import com.nseassist.analysis.StockScorer
 import com.nseassist.analysis.TechnicalIndicators
 import com.nseassist.analysis.TrendDetector
 import com.nseassist.data.api.MemoryClient
 import com.nseassist.data.api.NewsClient
+import com.nseassist.data.api.UpstoxClient
+import com.nseassist.data.api.UpstoxTokenExpiredException
 import com.nseassist.data.api.YahooFinanceClient
+import com.nseassist.data.local.AiSettingsStore
 import com.nseassist.data.model.PredictionLogRequest
 import kotlinx.coroutines.launch
 import com.nseassist.data.model.MarketOverview
@@ -27,6 +30,16 @@ class NSERepository {
     private val indicators    = TechnicalIndicators()
     private val trendDetector = TrendDetector()
     private val scorer        = StockScorer()
+
+    // ── Data Source (set by MainViewModel when user changes preference) ──────────
+    // "yahoo"      → Yahoo Finance only (default)
+    // "upstox"     → Upstox for live snapshot; Yahoo Finance for historical data
+    var dataSource: String = AiSettingsStore.DATA_SOURCE_YAHOO
+    var upstoxAccessToken: String = ""
+
+    /** Called when Upstox returns 401 — token expired or invalidated.
+     *  MainViewModel registers this to update UI state and clear the token. */
+    var onUpstoxTokenExpired: (() -> Unit)? = null
 
     // ── Session-level caches (in-memory, cleared on next cold start) ─────────────
 
@@ -51,8 +64,12 @@ class NSERepository {
             val nifty     = indices.firstOrNull { it.symbol == "^NSEI" }
             val bankNifty = indices.firstOrNull { it.symbol == "^NSEBANK" }
 
-            val gainers = fetchTopMovers(isGainers = true)
-            val losers  = fetchTopMovers(isGainers = false)
+            // Fetch screener once — shared by both gainers and losers sort
+            val screenerQuotes = withTimeoutOrNull(30_000L) {
+                YahooFinanceClient.screenNseStocks(minVolume = 1_000_000)
+            } ?: emptyList()
+            val gainers = topMoversFromList(screenerQuotes, isGainers = true)
+            val losers  = topMoversFromList(screenerQuotes, isGainers = false)
 
             val niftyVwap     = nifty?.let     { (it.dayHigh + it.dayLow + it.price) / 3 } ?: 0.0
             val bankNiftyVwap = bankNifty?.let { (it.dayHigh + it.dayLow + it.price) / 3 } ?: 0.0
@@ -80,7 +97,9 @@ class NSERepository {
     suspend fun fetchCurrentPrices(symbols: List<String>): Map<String, Double> =
         withContext(Dispatchers.IO) {
             if (symbols.isEmpty()) return@withContext emptyMap()
-            val nsSymbols = symbols.map { "${it.removeSuffix(".NS")}.NS" }
+            val cleanSymbols = symbols.map { it.removeSuffix(".NS") }
+
+            val nsSymbols = cleanSymbols.map { "$it.NS" }
             val quotes    = YahooFinanceClient.getBatchQuotes(nsSymbols)
             quotes.associate { it.symbol.removeSuffix(".NS") to it.price }
         }
@@ -90,7 +109,7 @@ class NSERepository {
     suspend fun scanAffordableStocks(capital: Double, category: ScanCategory): Result<List<StockData>> =
         withContext(Dispatchers.IO) {
             runCatching {
-                Log.d("NSERepository", "Screener scan — capital=₹$capital, category=${category.routeValue}")
+                AppLogger.d("SCAN", "Start — capital=₹$capital category=${category.routeValue} source=$dataSource")
 
                 // Fetch indices for market condition detection in parallel with stock screener
                 val indicesDeferred = async {
@@ -109,9 +128,9 @@ class NSERepository {
                     niftyChangePct = nifty?.changePct ?: 0.0,
                     niftyAboveVwap = nifty?.let { (it.dayHigh + it.dayLow + it.price) / 3 < it.price } ?: true,
                 )
-                Log.d("NSERepository", "Market condition: $marketCondition")
+                AppLogger.d("SCAN", "Market: $marketCondition NIFTY=${String.format("%.2f", nifty?.changePct ?: 0.0)}%")
 
-                Log.d("NSERepository", "Screener returned ${allQuotes.size} liquid NSE stocks")
+                AppLogger.d("SCAN", "Screener returned ${allQuotes.size} liquid NSE stocks")
 
                 val snapshots = allQuotes.mapNotNull { q ->
                     if (q.price !in 1.0..capital) return@mapNotNull null
@@ -168,10 +187,71 @@ class NSERepository {
                     }
                 }
 
-                Log.d("NSERepository", "Affordable after filter: ${snapshots.size}")
-                snapshots.sortedByDescending { kotlin.math.abs(it.changePct) }
+                AppLogger.d("SCAN", "After price+category filter: ${snapshots.size} stocks")
+
+                // ── Live data overlay: replace Yahoo snapshot with real-time data ──────────
+                val finalSnapshots = if (dataSource == AiSettingsStore.DATA_SOURCE_UPSTOX && upstoxAccessToken.isNotBlank()) {
+                    overlayUpstoxQuotes(snapshots)
+                } else {
+                    snapshots
+                }
+
+                finalSnapshots.sortedByDescending { kotlin.math.abs(it.changePct) }
             }
         }
+
+    /** Fetches live Upstox quotes for the given stock list and overlays real-time
+     *  fields (ltp, change, changePct, dayHigh, dayLow, volume, vwap, aboveVwap, gapType).
+     *  Yahoo Finance fields that Upstox doesn't provide (avgVolume, marketCap, name)
+     *  are preserved as-is from the Yahoo screener result. */
+    private suspend fun overlayUpstoxQuotes(stocks: List<StockData>): List<StockData> {
+        val symbols = stocks.map { it.symbol }
+        AppLogger.d("UPSTOX", "Overlay: fetching live quotes for ${symbols.size} stocks")
+        val upstoxQuotes = runCatching {
+            withTimeoutOrNull(20_000L) {
+                UpstoxClient.getBatchQuotes(symbols, upstoxAccessToken)
+            } ?: emptyList()
+        }.getOrElse { e ->
+            if (e is UpstoxTokenExpiredException) {
+                AppLogger.w("UPSTOX", "401 — token expired, falling back to Yahoo Finance")
+                upstoxAccessToken = ""          // stop further Upstox calls this session
+                onUpstoxTokenExpired?.invoke()  // notify ViewModel to update UI
+            } else {
+                AppLogger.e("UPSTOX", "Overlay failed: ${e.message}")
+            }
+            emptyList()
+        }
+
+        if (upstoxQuotes.isEmpty()) {
+            AppLogger.w("UPSTOX", "0 quotes returned — keeping Yahoo data")
+            return stocks
+        }
+
+        val quoteMap = upstoxQuotes.associateBy { it.symbol }
+        val overlaid = stocks.map { sd ->
+            val uq = quoteMap[sd.symbol] ?: return@map sd
+            val gapType = when {
+                uq.open > uq.prevClose * 1.005 -> "GAP UP"
+                uq.open < uq.prevClose * 0.995 -> "GAP DOWN"
+                else                            -> "FLAT"
+            }
+            sd.copy(
+                ltp         = uq.ltp,
+                change      = uq.change,
+                changePct   = uq.changePct,
+                dayHigh     = uq.dayHigh,
+                dayLow      = uq.dayLow,
+                volume      = uq.volume,
+                vwap        = uq.vwap,
+                open        = uq.open,
+                aboveVwap   = uq.ltp > uq.vwap,
+                volumeSpike = sd.avgVolume > 0 && uq.volume > sd.avgVolume * 1.5,
+                gapType     = gapType,
+            )
+        }
+        AppLogger.d("UPSTOX", "Overlay applied to ${overlaid.count { quoteMap.containsKey(it.symbol) }}/${overlaid.size} stocks")
+        return overlaid
+    }
 
     // ── Full Deep Analysis for one stock ───────────────────────────────────────
 
@@ -181,7 +261,7 @@ class NSERepository {
         runCatching {
             val cleanSymbol  = ticker.removeSuffix(".NS")
             val yahooSymbol  = "$cleanSymbol.NS"
-            Log.d("NSERepository", "Deep analysis via Yahoo Finance: $yahooSymbol")
+            AppLogger.d("SCAN", "Deep analysis: $yahooSymbol fetchNews=$fetchNews")
 
             // Fetch quote, 90-day history, asset profile, and 5-min data in parallel
             val quoteDeferred    = async {
@@ -203,6 +283,30 @@ class NSERepository {
             val quote = quoteList.firstOrNull()
                 ?: error("No data for $yahooSymbol — check internet connection")
 
+            // ── Live quote overlay for Phase 2 ────────────────────────────────
+            // Upstox replaces Yahoo's 15-min-delayed price fields.
+            // Historical data (RSI, EMA, MACD) always comes from Yahoo Finance.
+
+            val upstoxQuote: UpstoxClient.UpstoxQuote? = if (
+                dataSource == AiSettingsStore.DATA_SOURCE_UPSTOX && upstoxAccessToken.isNotBlank()
+            ) {
+                runCatching {
+                    withTimeoutOrNull(10_000L) {
+                        UpstoxClient.getBatchQuotes(listOf(cleanSymbol), upstoxAccessToken)
+                            .firstOrNull()
+                    }
+                }.getOrElse { e ->
+                    if (e is UpstoxTokenExpiredException) {
+                        AppLogger.w("UPSTOX", "401 in Phase 2 — token expired")
+                        upstoxAccessToken = ""
+                        onUpstoxTokenExpired?.invoke()
+                    } else {
+                        AppLogger.e("UPSTOX", "Phase 2 quote failed: ${e.message}")
+                    }
+                    null
+                }
+            } else null
+
             // News only fetched when explicitly requested (detail screen) — skipped during scans
             val news = if (fetchNews) {
                 runCatching {
@@ -222,16 +326,18 @@ class NSERepository {
             val lows    = history.map { it.low }
             val volumes = history.map { it.volume.toDouble() }
 
-            val ltp       = quote.price
-            val prevClose = quote.prevClose
-            val change    = quote.change
-            val changePct = quote.changePct
-            val dayHigh   = quote.dayHigh
-            val dayLow    = quote.dayLow
-            val volume    = quote.volume
-            val open      = quote.open
-            val vwap      = (dayHigh + dayLow + ltp) / 3
+            // Priority: Upstox > Yahoo Finance
+            val ltp       = upstoxQuote?.ltp       ?: quote.price
+            val prevClose = upstoxQuote?.prevClose ?: quote.prevClose
+            val change    = upstoxQuote?.change    ?: quote.change
+            val changePct = upstoxQuote?.changePct ?: quote.changePct
+            val dayHigh   = upstoxQuote?.dayHigh   ?: quote.dayHigh
+            val dayLow    = upstoxQuote?.dayLow    ?: quote.dayLow
+            val volume    = upstoxQuote?.volume    ?: quote.volume
+            val open      = upstoxQuote?.open      ?: quote.open
+            val vwap      = upstoxQuote?.vwap      ?: (dayHigh + dayLow + ltp) / 3
             val aboveVwap = ltp > vwap
+            if (upstoxQuote != null) { AppLogger.d("UPSTOX", "Phase 2 live: $cleanSymbol LTP=₹$ltp change=${String.format("%.2f", changePct)}%") }
 
             // Technical indicators
             val rsi                    = indicators.rsi(closes, period = 14)
@@ -356,6 +462,7 @@ class NSERepository {
             val option = scorer.optionAction(stockData)
             val enriched = stockData.copy(score = score, optionAction = option, news = news, newsImpactScore = newsImpact, isDeepEnriched = true)
             val quickTake = generateQuickTake(enriched, thirtyMinCandle, pivots, supertrend30m?.signal ?: "NEUTRAL")
+            if (quickTake != null) AppLogger.d("QT", "$cleanSymbol → ${quickTake.action} (${quickTake.confidence}%)")
             val result = enriched.copy(quickTake = quickTake)
 
             // Fire-and-forget prediction log: logs today's prediction and verifies yesterday's
@@ -573,23 +680,19 @@ class NSERepository {
                 val option = scorer.optionAction(stockData)
                 val enriched = stockData.copy(score = score, optionAction = option, newsImpactScore = newsImpact)
                 val quickTake = generateQuickTake(enriched, thirtyMinCandle, pivots, supertrend30m?.signal ?: "NEUTRAL", orbBreakoutMode)
+                if (quickTake != null) AppLogger.d("QT", "${phase1.symbol} → ${quickTake.action} (${quickTake.confidence}%)")
                 enriched.copy(quickTake = quickTake)
             }
         }
 
     // ── Top Movers ────────────────────────────────────────────────────────────
 
-    private suspend fun fetchTopMovers(isGainers: Boolean): List<MoverItem> {
-        val quotes = withTimeoutOrNull(30_000L) {
-            YahooFinanceClient.screenNseStocks(minVolume = 1_000_000)
-        } ?: emptyList()
-
-        return quotes
+    private fun topMoversFromList(quotes: List<YahooFinanceClient.Quote>, isGainers: Boolean): List<MoverItem> =
+        quotes
             .let { if (isGainers) it.sortedByDescending { q -> q.changePct }
                    else           it.sortedBy           { q -> q.changePct } }
             .take(5)
             .map { q -> MoverItem(q.symbol.removeSuffix(".NS"), q.price, q.changePct) }
-    }
 
     // ── Market Status ─────────────────────────────────────────────────────────
 
