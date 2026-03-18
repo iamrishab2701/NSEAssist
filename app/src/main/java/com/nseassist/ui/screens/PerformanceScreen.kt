@@ -18,6 +18,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -42,6 +43,8 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -200,6 +203,44 @@ private fun PaperTradesTab(trades: List<PaperTradeEntry>, vm: MainViewModel) {
 
 @Composable
 private fun TradeCard(trade: PaperTradeEntry, vm: MainViewModel) {
+    var pendingOutcome  by remember { mutableStateOf("") }        // "TARGET_HIT" or "SL_HIT"
+    var outcomePrice    by remember { mutableStateOf("") }
+    var showPriceDialog by remember { mutableStateOf(false) }
+
+    if (showPriceDialog) {
+        val isTargetHit = pendingOutcome == "TARGET_HIT"
+        val label = if (isTargetHit) "Target Hit Price" else "SL Hit Price"
+        AlertDialog(
+            onDismissRequest = { showPriceDialog = false; outcomePrice = "" },
+            title   = { Text(label) },
+            text    = {
+                OutlinedTextField(
+                    value         = outcomePrice,
+                    onValueChange = { outcomePrice = it },
+                    label         = { Text("Exit price (₹)") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                    singleLine    = true,
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        val price = outcomePrice.toDoubleOrNull()
+                        if (price != null && price > 0) {
+                            vm.updateTradeOutcome(trade.id, pendingOutcome, price)
+                            showPriceDialog = false
+                            outcomePrice    = ""
+                        }
+                    },
+                    enabled = outcomePrice.toDoubleOrNull()?.let { it > 0 } == true,
+                ) { Text("Confirm", color = if (isTargetHit) GreenBull else RedBear) }
+            },
+            dismissButton = {
+                TextButton(onClick = { showPriceDialog = false; outcomePrice = "" }) { Text("Cancel") }
+            },
+        )
+    }
+
     val outcomeColor = when (trade.outcome) {
         "TARGET_HIT" -> GreenBull
         "SL_HIT"     -> RedBear
@@ -237,8 +278,16 @@ private fun TradeCard(trade: PaperTradeEntry, vm: MainViewModel) {
             if (trade.outcome == "OPEN") {
                 HorizontalDivider(color = DividerColor, thickness = 0.5.dp, modifier = Modifier.padding(top = 4.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutcomeButton("Target Hit", GreenBull) { vm.updateTradeOutcome(trade.id, "TARGET_HIT", trade.entryPrice) }
-                    OutcomeButton("SL Hit", RedBear)        { vm.updateTradeOutcome(trade.id, "SL_HIT", trade.entryPrice) }
+                    OutcomeButton("Target Hit", GreenBull) {
+                        pendingOutcome  = "TARGET_HIT"
+                        outcomePrice    = if (trade.entryPrice > 0) "%.2f".format(trade.entryPrice) else ""
+                        showPriceDialog = true
+                    }
+                    OutcomeButton("SL Hit", RedBear) {
+                        pendingOutcome  = "SL_HIT"
+                        outcomePrice    = if (trade.entryPrice > 0) "%.2f".format(trade.entryPrice) else ""
+                        showPriceDialog = true
+                    }
                     OutcomeButton("Expired", TextSecondary) { vm.updateTradeOutcome(trade.id, "EXPIRED", null) }
                 }
             }

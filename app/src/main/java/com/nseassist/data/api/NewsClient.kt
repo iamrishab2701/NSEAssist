@@ -1,12 +1,13 @@
 package com.nseassist.data.api
 
-import android.util.Log
+import com.nseassist.util.AppLogger
 import com.nseassist.data.model.NewsArticle
 import com.nseassist.data.model.NewsResult
 import com.nseassist.data.model.NewsSentiment
 import kotlinx.coroutines.suspendCancellableCoroutine
 import okhttp3.Call
 import okhttp3.Callback
+import com.nseassist.util.AppLoggingInterceptor
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
@@ -36,6 +37,7 @@ object NewsClient {
     private val client = OkHttpClient.Builder()
         .connectTimeout(10, TimeUnit.SECONDS)
         .readTimeout(20, TimeUnit.SECONDS)
+        .addInterceptor(AppLoggingInterceptor())
         .build()
 
     /**
@@ -62,7 +64,7 @@ object NewsClient {
         }
 
         val body = execute(url) ?: run {
-            Log.w(TAG, "Worker /news returned null for $stockSymbol")
+            AppLogger.w("NEWS", "$stockSymbol — Worker returned null (network or HTTP error)")
             return null
         }
 
@@ -73,7 +75,7 @@ object NewsClient {
             val sources    = json.optInt("sourceCount", 0)
 
             if (arr == null || arr.length() == 0) {
-                Log.d(TAG, "No news for $stockSymbol")
+                AppLogger.d("NEWS", "$stockSymbol — no articles found")
                 return null
             }
 
@@ -90,7 +92,7 @@ object NewsClient {
 
             val overallSentiment = aggregateSentiment(articles.map { it.sentiment })
 
-            Log.d(TAG, "News [$stockSymbol] articles=${articles.size} sources=$sources")
+            AppLogger.d("NEWS", "$stockSymbol — articles=${articles.size} sources=$sources sentiment=$overallSentiment")
 
             NewsResult(
                 sentiment          = overallSentiment,
@@ -105,7 +107,7 @@ object NewsClient {
                 articles           = articles,
             )
         }.getOrElse {
-            Log.e(TAG, "Failed to parse Worker /news response for $stockSymbol: ${it.message}")
+            AppLogger.e("NEWS", "$stockSymbol — parse failed: ${it.message}")
             null
         }
     }
@@ -154,7 +156,7 @@ object NewsClient {
                 if (!cont.isActive) return
                 response.use { r ->
                     if (!r.isSuccessful) {
-                        Log.w(TAG, "Worker /news HTTP ${r.code}")
+                        AppLogger.w("NEWS", "Worker /news HTTP ${r.code}")
                         cont.resume(null)
                     } else {
                         cont.resume(r.body?.string())

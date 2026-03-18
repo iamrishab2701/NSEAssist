@@ -7,6 +7,9 @@ import com.nseassist.NSEAssistApp
 import com.nseassist.analysis.SignalReplay
 import com.nseassist.data.api.GlobalTrendsClient
 import com.nseassist.data.api.MemoryClient
+import com.nseassist.data.api.UpstoxClient
+import com.nseassist.data.local.AiSettingsStore
+import com.nseassist.util.AppLogger
 import com.nseassist.data.local.ThemeMode
 import com.nseassist.data.model.AiAnalysisReport
 import com.nseassist.data.model.AiProvider
@@ -58,6 +61,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     // ── Global Trends ─────────────────────────────────────────────────────────────
     private val _globalTrends = MutableStateFlow<UiState<GlobalTrendsData>>(UiState.Loading)
     val globalTrends: StateFlow<UiState<GlobalTrendsData>> = _globalTrends
+    private var lastTrendsRefreshTime: Long = 0L
+    private val TRENDS_REFRESH_COOLDOWN = 5_000L // 5 seconds between manual refreshes
 
     // ── Stock News — loaded independently so technical data shows instantly ───────
     private val _stockNews = MutableStateFlow<UiState<NewsResult?>>(UiState.Loading)
@@ -72,6 +77,24 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     private val _testMorningSelloff = MutableStateFlow(aiSettingsStore.loadTestMorningSelloff())
     val testMorningSelloff: StateFlow<Boolean> = _testMorningSelloff
+
+    // ── Data Source (Yahoo Finance / Upstox) ─────────────────────────────────────
+    private val _dataSource = MutableStateFlow(aiSettingsStore.loadDataSource())
+    val dataSource: StateFlow<String> = _dataSource
+
+    // ── Upstox token status ──────────────────────────────────────────────────────
+    // true  = a valid token exists for today (IST date matches)
+    // false = no token or token is from a previous day
+    private val _upstoxTokenValid = MutableStateFlow(aiSettingsStore.isUpstoxTokenValidToday())
+    val upstoxTokenValid: StateFlow<Boolean> = _upstoxTokenValid
+
+    // true while the token exchange network call is in progress
+    private val _upstoxExchangingToken = MutableStateFlow(false)
+    val upstoxExchangingToken: StateFlow<Boolean> = _upstoxExchangingToken
+
+    // Non-null when token exchange fails — shown as an error in the UI
+    private val _upstoxTokenError = MutableStateFlow<String?>(null)
+    val upstoxTokenError: StateFlow<String?> = _upstoxTokenError
 
     // ── Theme mode — persisted preference, drives NSEAssistTheme ─────────────────
     private val _themeMode = MutableStateFlow(themeStore.load())
@@ -100,40 +123,148 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private var scanCacheTimestamp: Long          = 0L
     private val SCAN_CACHE_TTL = 5 * 60 * 1000L   // 5 minutes
 
+    // ── RTT / ORB / Oversold cache — same guard as scanStocks ────────────────────
+    private var rttCacheCapital:   Double        = -1.0
+    private var rttCacheCategory:  ScanCategory? = null
+    private var rttCacheMode:      Boolean       = false
+    private var rttCacheTimestamp: Long          = 0L
+
+    private var oversoldCacheCapital:   Double = -1.0
+    private var oversoldCacheTimestamp: Long   = 0L
+
     // ── Stock detail cache — back from news/chart sub-screen is instant ───────────
     private var detailCacheSymbol:    String = ""
     private var detailCacheTimestamp: Long   = 0L
     private val DETAIL_CACHE_TTL = 45_000L // 45 sec — fast for AI-report back-nav, forces re-fetch on re-search
 
     init {
+        // Apply persisted data source + credentials to repo immediately on start
+        val persistedSource = aiSettingsStore.loadDataSource()
+        repo.dataSource = persistedSource
+        val upstoxValid = aiSettingsStore.isUpstoxTokenValidToday()
+        if (upstoxValid) {
+            repo.upstoxAccessToken = aiSettingsStore.loadUpstoxAccessToken()
+        }
+        AppLogger.i("INIT", "Session start — dataSource=$persistedSource upstoxTokenValid=$upstoxValid")
+        // When Upstox returns 401, update UI state so the banner shows immediately
+        repo.onUpstoxTokenExpired = {
+            _upstoxTokenValid.value = false
+            AppLogger.w("UPSTOX", "Token expired — banner shown")
+        }
         loadMarketOverview()
     }
+
+    // ── Data Source ──────────────────────────────────────────────────────────────
+
+    /** Persists the chosen data source and updates the repository immediately. */
+    fun saveDataSource(source: String) {
+        aiSettingsStore.saveDataSource(source)
+        _dataSource.value = source
+        repo.dataSource = source
+        if (source != AiSettingsStore.DATA_SOURCE_UPSTOX) {
+            repo.upstoxAccessToken = ""
+        } else if (aiSettingsStore.isUpstoxTokenValidToday()) {
+            repo.upstoxAccessToken = aiSettingsStore.loadUpstoxAccessToken()
+        }
+    }
+
+    // ── Upstox Auth ──────────────────────────────────────────────────────────────
+
+    /** Returns the Upstox OAuth2 login URL to open in the user's browser. */
+    fun getUpstoxLoginUrl(): String {
+        val apiKey = aiSettingsStore.loadUpstoxApiKey()
+        return UpstoxClient.getLoginUrl(apiKey)
+    }
+
+    /** Saves Upstox API Key + Secret to SharedPreferences. */
+    fun saveUpstoxCredentials(apiKey: String, apiSecret: String) {
+        aiSettingsStore.saveUpstoxApiKey(apiKey)
+        aiSettingsStore.saveUpstoxApiSecret(apiSecret)
+    }
+
+    /** Exchanges the auth code (copied from the browser redirect URL) for today's access token. */
+    fun exchangeUpstoxToken(authCode: String) {
+        viewModelScope.launch {
+            _upstoxExchangingToken.value = true
+            _upstoxTokenError.value = null
+            try {
+                val apiKey    = aiSettingsStore.loadUpstoxApiKey()
+                val apiSecret = aiSettingsStore.loadUpstoxApiSecret()
+                if (apiKey.isBlank() || apiSecret.isBlank()) {
+                    _upstoxTokenError.value = "Save your API Key and Secret first"
+                    return@launch
+                }
+                val token = UpstoxClient.exchangeToken(apiKey, apiSecret, authCode)
+                aiSettingsStore.saveUpstoxAccessToken(token)
+                repo.upstoxAccessToken = token
+                _upstoxTokenValid.value = true
+                AppLogger.d("UPSTOX", "Token activated successfully")
+            } catch (e: Exception) {
+                _upstoxTokenError.value = e.message ?: "Token activation failed"
+                AppLogger.e("UPSTOX", "Token exchange failed: ${e.message}")
+            } finally {
+                _upstoxExchangingToken.value = false
+            }
+        }
+    }
+
+    /** Clears the Upstox token error message (call after user dismisses it). */
+    fun clearUpstoxTokenError() { _upstoxTokenError.value = null }
 
     fun loadMarketOverview() {
         viewModelScope.launch {
             _marketOverview.value = UiState.Loading
             _marketOverview.value = repo.getMarketOverview()
-                .fold(onSuccess = { UiState.Success(it) }, onFailure = { UiState.Error(it.message ?: "Network error") })
+                .fold(
+                    onSuccess = {
+                        AppLogger.d("MARKET", "Overview loaded — NIFTY=${String.format("%.2f", it.nifty50ChangePct)}% BankNIFTY=${String.format("%.2f", it.bankNiftyChangePct)}% gainers=${it.topGainers.size} losers=${it.topLosers.size} status=${it.marketStatus}")
+                        UiState.Success(it)
+                    },
+                    onFailure = {
+                        AppLogger.e("MARKET", "Overview failed: ${it.message}")
+                        UiState.Error(it.message ?: "Network error")
+                    },
+                )
         }
     }
 
     fun loadGlobalTrends() {
         // Skip if already loaded (cached) — user can force refresh via the Refresh button
-        if (_globalTrends.value is UiState.Success) return
+        if (_globalTrends.value is UiState.Success) {
+            AppLogger.d("MARKET", "Global trends cache hit — skipping fetch")
+            return
+        }
         viewModelScope.launch {
             _globalTrends.value = UiState.Loading
             val data = GlobalTrendsClient.fetchGlobalTrends()
-            _globalTrends.value = if (data != null) UiState.Success(data)
-                                  else UiState.Error("Failed to load global trends")
+            if (data != null) {
+                AppLogger.d("MARKET", "Global trends loaded — bias=${data.overallBias} commodities=${data.commodities.size} forex=${data.forex.size} impacts=${data.impacts.size}")
+                _globalTrends.value = UiState.Success(data)
+            } else {
+                AppLogger.e("MARKET", "Global trends fetch failed")
+                _globalTrends.value = UiState.Error("Failed to load global trends")
+            }
         }
     }
 
     fun refreshGlobalTrends() {
+        val now = System.currentTimeMillis()
+        if (_globalTrends.value is UiState.Loading || (now - lastTrendsRefreshTime) < TRENDS_REFRESH_COOLDOWN) {
+            AppLogger.d("MARKET", "Global trends — throttled (cooldown or in-flight), skipping")
+            return
+        }
+        lastTrendsRefreshTime = now
         viewModelScope.launch {
+            AppLogger.d("MARKET", "Global trends refresh triggered")
             _globalTrends.value = UiState.Loading
             val data = GlobalTrendsClient.fetchGlobalTrends()
-            _globalTrends.value = if (data != null) UiState.Success(data)
-                                  else UiState.Error("Failed to load global trends")
+            if (data != null) {
+                AppLogger.d("MARKET", "Global trends refreshed — bias=${data.overallBias} commodities=${data.commodities.size} forex=${data.forex.size} impacts=${data.impacts.size}")
+                _globalTrends.value = UiState.Success(data)
+            } else {
+                AppLogger.e("MARKET", "Global trends refresh failed")
+                _globalTrends.value = UiState.Error("Failed to load global trends")
+            }
         }
     }
 
@@ -146,6 +277,25 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun scanReadyToTrade(capital: Double, category: ScanCategory, orbBreakoutMode: Boolean = false) {
         _capital.value = capital
+        val mode = if (orbBreakoutMode) "ORB" else "ReadyToTrade"
+        val now = System.currentTimeMillis()
+        val cached = capital == rttCacheCapital &&
+                     category == rttCacheCategory &&
+                     orbBreakoutMode == rttCacheMode &&
+                     (now - rttCacheTimestamp) < SCAN_CACHE_TTL &&
+                     _readyToTradeResults.value.let { it is UiState.Success && (it as UiState.Success).data.isNotEmpty() }
+        if (cached) {
+            val ageS  = (now - rttCacheTimestamp) / 1000
+            val count = (_readyToTradeResults.value as? UiState.Success)?.data?.size ?: 0
+            AppLogger.d("SCAN", "$mode cache hit — ${count} stocks, age=${ageS}s (TTL=${SCAN_CACHE_TTL/1000}s)")
+            return
+        }
+        rttCacheCapital   = capital
+        rttCacheCategory  = category
+        rttCacheMode      = orbBreakoutMode
+        rttCacheTimestamp = now
+
+        AppLogger.d("SCAN", "$mode start — capital=₹$capital category=${category.routeValue}")
         viewModelScope.launch {
             _readyToTradeResults.value = UiState.Loading
             _readyToTradeProgress.value = null
@@ -169,7 +319,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                             .take(20)
                     else
                         phase1List.sortedByDescending { it.score }.take(20)
+                    AppLogger.d("SCAN", "$mode phase1=${phase1List.size} → top20=${top20.size}")
                     if (top20.isEmpty()) {
+                        AppLogger.d("SCAN", "$mode — no candidates after filter")
                         _readyToTradeResults.value = UiState.Success(emptyList())
                         return@fold
                     }
@@ -194,7 +346,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     }
                     _readyToTradeProgress.value = null
                 },
-                onFailure = { _readyToTradeResults.value = UiState.Error(it.message ?: "Scan failed") },
+                onFailure = {
+                    AppLogger.e("SCAN", "$mode failed: ${it.message}")
+                    _readyToTradeResults.value = UiState.Error(it.message ?: "Scan failed")
+                },
             )
         }
     }
@@ -207,6 +362,19 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      */
     fun scanOversoldBounce(capital: Double) {
         _capital.value = capital
+        val now = System.currentTimeMillis()
+        val cached = capital == oversoldCacheCapital &&
+                     (now - oversoldCacheTimestamp) < SCAN_CACHE_TTL &&
+                     _readyToTradeResults.value.let { it is UiState.Success && (it as UiState.Success).data.isNotEmpty() }
+        if (cached) {
+            val ageS  = (now - oversoldCacheTimestamp) / 1000
+            val count = (_readyToTradeResults.value as? UiState.Success)?.data?.size ?: 0
+            AppLogger.d("SCAN", "MorningSelloff cache hit — ${count} stocks, age=${ageS}s (TTL=${SCAN_CACHE_TTL/1000}s)")
+            return
+        }
+        oversoldCacheCapital   = capital
+        oversoldCacheTimestamp = now
+
         viewModelScope.launch {
             _readyToTradeResults.value = UiState.Loading
             _readyToTradeProgress.value = null
@@ -219,7 +387,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     val f2 = f1.filter { !it.aboveVwap }
                     val f3 = f2.filter { it.avgVolume > 0 && it.volume.toDouble() / it.avgVolume >= 0.50 }  // 50%+ of avg daily volume already traded
                     val f4 = f3.filter { it.ltp <= capital }              // must be affordable with user's capital
-                    android.util.Log.d("OversoldScan", "Total=${phase1List.size} | down4%=${f1.size} | belowVwap=${f2.size} | vol50%=${f3.size} | affordable=${f4.size}")
+                    AppLogger.d("SCAN", "MorningSelloff total=${phase1List.size} down4%=${f1.size} belowVwap=${f2.size} vol50%=${f3.size} affordable=${f4.size}")
 
                     val top20 = f4.sortedBy { it.changePct }.take(20)
 
@@ -249,7 +417,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     }
                     _readyToTradeProgress.value = null
                 },
-                onFailure = { _readyToTradeResults.value = UiState.Error(it.message ?: "Scan failed") },
+                onFailure = {
+                    AppLogger.e("SCAN", "MorningSelloff failed: ${it.message}")
+                    _readyToTradeResults.value = UiState.Error(it.message ?: "Scan failed")
+                },
             )
         }
     }
@@ -279,7 +450,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                      category == scanCacheCategory &&
                      (now - scanCacheTimestamp) < SCAN_CACHE_TTL &&
                      _scanResults.value.let { it is UiState.Success && (it as UiState.Success).data.isNotEmpty() }
-        if (cached) return   // back-navigation: results still fresh — skip re-scan
+        if (cached) {
+            val ageS = (now - scanCacheTimestamp) / 1000
+            val count = (_scanResults.value as? UiState.Success)?.data?.size ?: 0
+            AppLogger.d("SCAN", "Cache hit — ${count} stocks, age=${ageS}s (TTL=${SCAN_CACHE_TTL/1000}s)")
+            return
+        }
 
         // Lock cache immediately so concurrent calls from the same recomposition don't double-scan
         scanCacheCapital   = capital
@@ -287,16 +463,21 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         scanCacheTimestamp = now
 
         viewModelScope.launch {
+            AppLogger.d("SCAN", "scanStocks capital=₹$capital category=${category.routeValue}")
             _scanResults.value = UiState.Loading
             _deepEnrichProgress.value = null
             repo.scanAffordableStocks(capital, category).fold(
                 onSuccess = { phase1List ->
+                    AppLogger.d("SCAN", "Phase 1 done — ${phase1List.size} stocks")
                     // Phase 1: show the list immediately with quick scores
                     _scanResults.value = UiState.Success(phase1List)
                     // Phase 2: deep-analyse top 15 in background, update list live
                     deepEnrichScanResults(phase1List)
                 },
-                onFailure = { _scanResults.value = UiState.Error(it.message ?: "Scan failed") },
+                onFailure = {
+                    AppLogger.e("SCAN", "Failed: ${it.message}")
+                    _scanResults.value = UiState.Error(it.message ?: "Scan failed")
+                },
             )
         }
     }
@@ -315,6 +496,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private suspend fun deepEnrichScanResults(phase1List: List<StockData>) {
         val top15 = phase1List.sortedByDescending { it.score }.take(15)
         if (top15.isEmpty()) return
+        AppLogger.d("SCAN", "Phase 2 starting — enriching top ${top15.size} stocks")
 
         // ConcurrentHashMap — safe for simultaneous updates from 15 parallel coroutines
         val stockMap = ConcurrentHashMap(phase1List.associateBy { it.symbol })
@@ -338,6 +520,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             }.awaitAll()
         }
 
+        AppLogger.d("SCAN", "Phase 2 done — all ${top15.size} stocks enriched")
         _deepEnrichProgress.value = null  // done — banner disappears
     }
 
@@ -349,6 +532,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val enrichedFromScan = (_scanResults.value as? UiState.Success)?.data
             ?.firstOrNull { it.symbol == symbol && it.isDeepEnriched }
         if (enrichedFromScan != null) {
+            AppLogger.d("SCAN", "Detail cache hit (Phase 2) — $symbol served instantly")
             _stockDetail.value   = UiState.Success(enrichedFromScan)
             detailCacheSymbol    = symbol
             detailCacheTimestamp = now
@@ -356,17 +540,22 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             return
         }
 
-        // Priority 2: same stock re-opened within 5 min — technical data instant,
-        // but always refresh news (intraday news can change any minute)
+        // Priority 2: same stock re-opened within TTL — serve instantly.
+        // Also matches UiState.Loading (fetch already in-flight) so a second
+        // LaunchedEffect fire while the first request is still running doesn't
+        // kick off a duplicate analyseStock call.
         val cached = symbol == detailCacheSymbol &&
                      (now - detailCacheTimestamp) < DETAIL_CACHE_TTL &&
-                     _stockDetail.value is UiState.Success
+                     (_stockDetail.value is UiState.Success || _stockDetail.value is UiState.Loading)
         if (cached) {
+            val ageS = (now - detailCacheTimestamp) / 1000
+            AppLogger.d("SCAN", "Detail cache hit (back-nav) — $symbol age=${ageS}s")
             (_stockDetail.value as? UiState.Success)?.data?.let { loadNewsForStock(it) }
             return
         }
 
         // Priority 3: fresh network fetch (stock NOT in Phase 2 top-15)
+        AppLogger.d("SCAN", "Detail fetch — $symbol (not in Phase 2 cache)")
         detailCacheSymbol    = symbol
         detailCacheTimestamp = now
         viewModelScope.launch {
@@ -391,6 +580,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 sector   = stock.sector,
                 industry = stock.industry,
             )
+            AppLogger.d("NEWS", "${stock.symbol} — ${news?.articles?.size ?: 0} articles sentiment=${news?.sentiment}")
             _stockNews.value = UiState.Success(news)
         }
     }
@@ -415,22 +605,28 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun analyzeStocksWithAi(provider: AiProvider, capital: Double, category: ScanCategory, stocks: List<StockData>) {
         val config = _aiSettings.value.providers.firstOrNull { it.provider == provider && it.apiKey.isNotBlank() }
         if (config == null) {
+            AppLogger.e("AI", "analyzeStocksWithAi — no API key for ${provider.label}")
             _aiAnalysis.value = UiState.Error("Add ${provider.label} API key in Settings first")
             return
         }
+        AppLogger.d("AI", "analyzeStocksWithAi — ${provider.label} stocks=${stocks.size} capital=₹$capital category=${category.routeValue}")
 
         viewModelScope.launch {
             _aiAnalysis.value = UiState.Loading
             _aiAnalysis.value = aiAnalysisService.analyzeStocks(config, capital, category, stocks)
                 .fold(
                     onSuccess = { UiState.Success(it) },
-                    onFailure = { UiState.Error(it.message ?: "AI analysis failed") },
+                    onFailure = {
+                        AppLogger.e("AI", "Batch analysis failed: ${it.message}")
+                        UiState.Error(it.message ?: "AI analysis failed")
+                    },
                 )
         }
     }
 
     /** Force a fresh scan regardless of cache — call this from a "Refresh" button. */
     fun forceRescan(capital: Double, category: ScanCategory) {
+        AppLogger.d("SCAN", "Force rescan — cache invalidated for capital=₹$capital category=${category.routeValue}")
         scanCacheTimestamp = 0L   // invalidate cache
         scanStocks(capital, category)
     }
@@ -468,9 +664,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val config = _aiSettings.value.providers
             .firstOrNull { it.provider == provider && it.apiKey.isNotBlank() }
         if (config == null) {
-            _singleStockAnalysis.value = UiState.Error("Add ${provider.label} API key in Settings → Model Configuration first")
+            AppLogger.e("AI", "analyzeCurrentStockWithAi — no API key for ${provider.label}")
+            _singleStockAnalysis.value = UiState.Error("Add ${provider.label} API key in Settings → Data & AI Settings first")
             return
         }
+        AppLogger.d("AI", "analyzeCurrentStockWithAi — ${provider.label} stock=${stock.symbol} capital=₹$capital")
 
         viewModelScope.launch {
             _singleStockAnalysis.value = UiState.Loading
@@ -478,7 +676,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 .analyzeSingleStock(config, capital, stock, news)
                 .fold(
                     onSuccess = { UiState.Success(it) },
-                    onFailure = { UiState.Error(it.message ?: "AI analysis failed") },
+                    onFailure = {
+                        AppLogger.e("AI", "Single-stock analysis failed (${stock.symbol}): ${it.message}")
+                        UiState.Error(it.message ?: "AI analysis failed")
+                    },
                 )
         }
     }
@@ -503,6 +704,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val result = java.util.concurrent.CopyOnWriteArrayList(alreadyDone)
         var done   = alreadyDone.size
 
+        AppLogger.d("AI", "enrichTop20 — already done=${alreadyDone.size} need=${needEnrichment.size}")
         if (needEnrichment.isEmpty()) {
             // All top 20 were already enriched by Phase 2 — nothing to fetch
             onProgress(top20.size, top20.size)
@@ -528,11 +730,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun prepareDeepExport(capital: Double, category: ScanCategory, stocks: List<StockData>, onReady: (List<StockData>) -> Unit) {
+        AppLogger.d("AI", "Export prep — enriching top 20 of ${stocks.size} stocks")
         viewModelScope.launch {
             _exportState.value = ExportState.Preparing(0, minOf(20, stocks.size))
             val finalList = enrichTop20(stocks) { done, total ->
                 _exportState.value = ExportState.Preparing(done, total)
             }
+            AppLogger.d("AI", "Export prep done — ${finalList.size} stocks ready")
             _exportState.value = ExportState.Idle
             onReady(finalList)
         }
@@ -541,9 +745,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun prepareDeepAiAnalysis(provider: AiProvider, capital: Double, category: ScanCategory, stocks: List<StockData>) {
         val config = _aiSettings.value.providers.firstOrNull { it.provider == provider && it.apiKey.isNotBlank() }
         if (config == null) {
+            AppLogger.e("AI", "prepareDeepAiAnalysis — no API key for ${provider.label}")
             _aiAnalysis.value = UiState.Error("Add ${provider.label} API key in Settings first")
             return
         }
+        AppLogger.d("AI", "Deep AI analysis — ${provider.label} enriching top 20 of ${stocks.size} stocks capital=₹$capital category=${category.routeValue}")
 
         viewModelScope.launch {
             _aiAnalysis.value = UiState.Loading
@@ -552,12 +758,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             val enrichedStocks = enrichTop20(stocks) { done, total ->
                 _exportState.value = ExportState.Preparing(done, total)
             }
+            AppLogger.d("AI", "Enrichment complete — sending ${enrichedStocks.size} stocks to ${provider.label}")
             _exportState.value = ExportState.Idle
 
             _aiAnalysis.value = aiAnalysisService.analyzeStocks(config, capital, category, enrichedStocks)
                 .fold(
                     onSuccess = { UiState.Success(it) },
-                    onFailure = { UiState.Error(it.message ?: "AI analysis failed") },
+                    onFailure = {
+                        AppLogger.e("AI", "Deep AI analysis failed: ${it.message}")
+                        UiState.Error(it.message ?: "AI analysis failed")
+                    },
                 )
         }
     }
@@ -573,6 +783,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Log a paper trade to Cloudflare D1 (fire-and-forget). */
     fun logPaperTrade(trade: PaperTradeRequest) {
+        AppLogger.d("TRADE", "Log ${trade.verdict} ${trade.symbol} via ${trade.aiProvider}")
         viewModelScope.launch {
             MemoryClient.logPaperTrade(trade)
         }
@@ -583,7 +794,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun loadTrades() {
         viewModelScope.launch {
             _trades.value = UiState.Loading
-            val list = MemoryClient.getTrades()
+            val list = runCatching { MemoryClient.getTrades() }.getOrElse {
+                AppLogger.e("TRADE", "Failed to load trades: ${it.message}")
+                _trades.value = UiState.Error(it.message ?: "Failed to load trades")
+                return@launch
+            }
 
             // Auto-resolve: only GO/BATCH trades that still have an entry price and target/SL text
             val openGo = list.filter {
@@ -595,6 +810,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             }
 
             if (openGo.isEmpty()) {
+                AppLogger.d("TRADE", "Loaded ${list.size} trades — no open trades to auto-resolve")
                 _trades.value = UiState.Success(list)
                 return@launch
             }
@@ -620,6 +836,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             }
 
             // Merge resolved outcomes into the in-memory list (no second network fetch needed)
+            if (resolved.isNotEmpty()) {
+                resolved.forEach { (id, outcomeAndLtp) ->
+                    val sym = list.firstOrNull { it.id == id }?.symbol ?: "?"
+                    AppLogger.d("TRADE", "Auto-resolved #$id $sym → ${outcomeAndLtp.first} @ ₹${outcomeAndLtp.second}")
+                }
+            }
+            AppLogger.d("TRADE", "Loaded ${list.size} trades, auto-resolved ${resolved.size}")
             val finalList = list.map { trade ->
                 val r = resolved[trade.id]
                 if (r != null) trade.copy(outcome = r.first, outcomePrice = r.second) else trade
@@ -634,6 +857,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Update the outcome of a logged trade (e.g. TARGET_HIT / SL_HIT). */
     fun updateTradeOutcome(id: Int, outcome: String, outcomePrice: Double?) {
+        AppLogger.d("TRADE", "Update #$id → $outcome" + if (outcomePrice != null) " @ ₹$outcomePrice" else "")
         viewModelScope.launch {
             MemoryClient.updateTradeOutcome(id, outcome, outcomePrice)
             loadTrades()   // refresh list
@@ -667,9 +891,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      */
     fun runSignalReplay(stock: StockData) {
         if (stock.priceHistory.isEmpty()) {
+            AppLogger.w("SCAN", "Signal replay skipped for ${stock.symbol} — no price history (deep analysis required)")
             _signalReplay.value = UiState.Error("Deep analysis required — open stock detail first")
             return
         }
+        AppLogger.d("SCAN", "Signal replay started — ${stock.symbol} history=${stock.priceHistory.size} bars")
         viewModelScope.launch {
             _signalReplay.value = UiState.Loading
             val result = SignalReplay().replay(
@@ -678,6 +904,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 volumes = stock.volumeHistory.map { it.toDouble() },
                 atr     = stock.atr,
             )
+            AppLogger.d("SCAN", "Signal replay done — ${stock.symbol} signals=${result.events.size} winRate=${String.format("%.0f", result.winRate * 100)}% wins=${result.wins} losses=${result.losses} neutral=${result.neutrals}")
             _signalReplay.value = UiState.Success(result)
             // Log signal outcomes to D1 (fire-and-forget)
             if (result.toSignalOutcomes.isNotEmpty()) {

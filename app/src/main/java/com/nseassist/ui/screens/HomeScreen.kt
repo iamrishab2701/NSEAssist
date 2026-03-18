@@ -31,6 +31,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.navigation.NavController
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.foundation.clickable
+import com.nseassist.data.local.AiSettingsStore
 import com.nseassist.data.local.ThemeMode
 import com.nseassist.data.model.AiProvider
 import com.nseassist.data.model.AiProviderConfig
@@ -53,10 +55,12 @@ private enum class HomeTab(val label: String) {
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun HomeScreen(navController: NavController, vm: MainViewModel) {
-    val marketState by vm.marketOverview.collectAsState()
-    val trendsState by vm.globalTrends.collectAsState()
-    val aiSettings by vm.aiSettings.collectAsState()
-    val testMorningSelloff by vm.testMorningSelloff.collectAsState()
+    val marketState         by vm.marketOverview.collectAsState()
+    val trendsState         by vm.globalTrends.collectAsState()
+    val aiSettings          by vm.aiSettings.collectAsState()
+    val testMorningSelloff  by vm.testMorningSelloff.collectAsState()
+    val dataSource          by vm.dataSource.collectAsState()
+    val upstoxTokenValid    by vm.upstoxTokenValid.collectAsState()
     var capital by remember { mutableStateOf("") }
     var stockQuery by remember { mutableStateOf("") }
     var selectedCategory by rememberSaveable { mutableStateOf(ScanCategory.ALL.routeValue) }
@@ -128,6 +132,10 @@ fun HomeScreen(navController: NavController, vm: MainViewModel) {
                     MarketTrendTab(trendsState, onRetry = vm::refreshGlobalTrends)
                 }
                 HomeTab.Capital -> {
+                    // ── Upstox token warning banner ───────────────────────────
+                    if (dataSource == AiSettingsStore.DATA_SOURCE_UPSTOX && !upstoxTokenValid) {
+                        UpstoxTokenBanner(onGoToSettings = { navController.navigate("model_config") })
+                    }
                     var scanMode by remember { mutableStateOf("normal") }
                     CapitalInputCard(
                         capital = capital,
@@ -163,6 +171,48 @@ fun HomeScreen(navController: NavController, vm: MainViewModel) {
         }
     }
     } // AppGradientBackground
+}
+
+// ── Upstox token expired / not activated banner ──────────────────────────────────
+
+@Composable
+private fun UpstoxTokenBanner(onGoToSettings: () -> Unit) {
+    Card(
+        colors = CardDefaults.cardColors(containerColor = AmberWarn.copy(alpha = 0.13f)),
+        border = androidx.compose.foundation.BorderStroke(1.dp, AmberWarn.copy(alpha = 0.5f)),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onGoToSettings() },
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Text("⚠", fontSize = 18.sp)
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    "Upstox token not active",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 13.sp,
+                    color = AmberWarn,
+                )
+                Text(
+                    "Real-time data unavailable — using Yahoo Finance (15-min delay). " +
+                    "Tap here to activate today's token.",
+                    fontSize = 11.sp,
+                    color = AmberWarn.copy(alpha = 0.85f),
+                    lineHeight = 15.sp,
+                )
+            }
+            Icon(
+                Icons.AutoMirrored.Filled.ArrowForward,
+                contentDescription = "Go to settings",
+                tint = AmberWarn,
+                modifier = Modifier.size(18.dp),
+            )
+        }
+    }
 }
 
 @Composable
@@ -562,7 +612,7 @@ private fun AiSettingsTab(
             onClick = { onNavigate("performance") },
         )
         SettingsMenuRow(
-            title = "Model Configuration",
+            title = "Data & AI Settings",
             subtitle = "Add or update your AI provider API keys",
             onClick = { onNavigate("settings/model-config") },
         )

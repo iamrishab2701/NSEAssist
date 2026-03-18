@@ -1,6 +1,6 @@
 package com.nseassist.data.api
 
-import android.util.Log
+import com.nseassist.util.AppLogger
 import com.nseassist.data.model.GlobalIndexItem
 import com.nseassist.data.model.GlobalTrendsData
 import com.nseassist.data.model.ImpactCard
@@ -8,6 +8,7 @@ import com.nseassist.data.model.ImpactedStock
 import kotlinx.coroutines.suspendCancellableCoroutine
 import okhttp3.Call
 import okhttp3.Callback
+import com.nseassist.util.AppLoggingInterceptor
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
@@ -26,13 +27,13 @@ object GlobalTrendsClient {
     private val client = OkHttpClient.Builder()
         .connectTimeout(10, TimeUnit.SECONDS)
         .readTimeout(30, TimeUnit.SECONDS)
+        .addInterceptor(AppLoggingInterceptor())
         .build()
 
     suspend fun fetchGlobalTrends(): GlobalTrendsData? {
         val url  = "$WORKER_URL/global-trends"
-        Log.d(TAG, "→ fetching $url")
         val body = execute(url) ?: run {
-            Log.w(TAG, "Worker /global-trends returned null")
+            AppLogger.w("MARKET", "Global trends Worker returned null")
             return null
         }
         return runCatching {
@@ -48,10 +49,10 @@ object GlobalTrendsClient {
                 overallBias = json.optString("overallBias", "NEUTRAL"),
                 cachedAt    = json.optLong("cachedAt", System.currentTimeMillis()),
             )
-            Log.d(TAG, "← us=${data.us.size} asia=${data.asia.size} india=${data.india.size} adrs=${data.adrs.size} impacts=${data.impacts.size} bias=${data.overallBias}")
+            AppLogger.d("MARKET", "Global trends parsed — us=${data.us.size} asia=${data.asia.size} india=${data.india.size} adrs=${data.adrs.size} impacts=${data.impacts.size} bias=${data.overallBias}")
             data
         }.getOrElse {
-            Log.e(TAG, "Parse error: ${it.message}")
+            AppLogger.e("MARKET", "Global trends parse error: ${it.message}")
             null
         }
     }
@@ -117,10 +118,9 @@ object GlobalTrendsClient {
                 if (!cont.isActive) return
                 response.use { r ->
                     if (!r.isSuccessful) {
-                        Log.w(TAG, "Worker /global-trends HTTP ${r.code}")
+                        AppLogger.w("MARKET", "Worker /global-trends HTTP ${r.code}")
                         cont.resume(null)
                     } else {
-                        Log.d(TAG, "HTTP ${r.code} cache=${r.header("X-Cache", "?")}")
                         cont.resume(r.body?.string())
                     }
                 }
