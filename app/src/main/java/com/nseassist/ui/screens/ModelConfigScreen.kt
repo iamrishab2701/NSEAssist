@@ -22,6 +22,7 @@ import com.nseassist.ui.viewmodel.MainViewModel
 @Composable
 fun ModelConfigScreen(navController: NavController, vm: MainViewModel) {
     val aiSettings by vm.aiSettings.collectAsState()
+    val testMorningSelloff by vm.testMorningSelloff.collectAsState()
 
     AppGradientBackground {
     Scaffold(
@@ -52,6 +53,32 @@ fun ModelConfigScreen(navController: NavController, vm: MainViewModel) {
             )
             aiSettings.providers.forEach { config ->
                 AiProviderCard(config = config, onSave = vm::upsertAiProvider)
+            }
+
+            // ── Developer / Test Settings ─────────────────────────────────────
+            Card(colors = CardDefaults.cardColors(containerColor = CardDark), modifier = Modifier.fillMaxWidth()) {
+                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Developer Settings", fontWeight = FontWeight.Bold, fontSize = 15.sp, color = TextPrimary)
+                    Text("For testing only — not for live trading.", color = TextSecondary, fontSize = 12.sp)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Morning Selloff — Test Mode", fontWeight = FontWeight.SemiBold, fontSize = 14.sp, color = AmberWarn)
+                            Text("Bypass 9:15 AM–12:00 PM time restriction for testing", color = TextSecondary, fontSize = 11.sp)
+                        }
+                        Switch(
+                            checked = testMorningSelloff,
+                            onCheckedChange = { vm.setTestMorningSelloff(it) },
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = AmberWarn,
+                                checkedTrackColor = AmberWarn.copy(alpha = 0.3f),
+                            ),
+                        )
+                    }
+                }
             }
         }
     }

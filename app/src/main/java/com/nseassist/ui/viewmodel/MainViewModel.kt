@@ -70,6 +70,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val _aiSettings = MutableStateFlow(aiSettingsStore.load())
     val aiSettings: StateFlow<AiSettings> = _aiSettings
 
+    private val _testMorningSelloff = MutableStateFlow(aiSettingsStore.loadTestMorningSelloff())
+    val testMorningSelloff: StateFlow<Boolean> = _testMorningSelloff
+
     // ── Theme mode — persisted preference, drives NSEAssistTheme ─────────────────
     private val _themeMode = MutableStateFlow(themeStore.load())
     val themeMode: StateFlow<ThemeMode> = _themeMode
@@ -193,6 +196,72 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 },
                 onFailure = { _readyToTradeResults.value = UiState.Error(it.message ?: "Scan failed") },
             )
+        }
+    }
+
+    /**
+     * Morning Selloff scan — Large & Mid Cap stocks that have been heavily sold
+     * in the morning session (50–70% of avg daily volume already traded, price down,
+     * below VWAP). News is fetched for each stock to filter out bad-news selloffs
+     * (falling knife risk). Only meaningful 9:15 AM – 12:00 PM IST.
+     */
+    fun scanOversoldBounce(capital: Double) {
+        _capital.value = capital
+        viewModelScope.launch {
+            _readyToTradeResults.value = UiState.Loading
+            _readyToTradeProgress.value = null
+
+            // Use a high cap (₹100,000) so all large/mid cap stocks are included regardless
+            // of the user's actual capital — capital is only used for quantity sizing later
+            repo.scanAffordableStocks(100_000.0, ScanCategory.ALL).fold(
+                onSuccess = { phase1List ->
+                    val f1 = phase1List.filter { it.changePct <= -4.0 }
+                    val f2 = f1.filter { !it.aboveVwap }
+                    val f3 = f2.filter { it.avgVolume > 0 && it.volume.toDouble() / it.avgVolume >= 0.50 }  // 50%+ of avg daily volume already traded
+                    val f4 = f3.filter { it.ltp <= capital }              // must be affordable with user's capital
+                    android.util.Log.d("OversoldScan", "Total=${phase1List.size} | down4%=${f1.size} | belowVwap=${f2.size} | vol50%=${f3.size} | affordable=${f4.size}")
+
+                    val top20 = f4.sortedBy { it.changePct }.take(20)
+
+                    if (top20.isEmpty()) {
+                        _readyToTradeResults.value = UiState.Success(emptyList())
+                        return@fold
+                    }
+
+                    val stockMap = ConcurrentHashMap(top20.associateBy { it.symbol })
+                    val done = AtomicInteger(0)
+                    _readyToTradeProgress.value = 0 to top20.size
+
+                    coroutineScope {
+                        top20.map { stock ->
+                            async {
+                                val enriched = kotlinx.coroutines.withTimeoutOrNull(45_000L) {
+                                    // fetchNews = true — filter out bad-news selloffs
+                                    repo.analyseStockFromPhase1(stock, fetchNews = true, orbBreakoutMode = false).getOrNull()
+                                } ?: stock
+                                stockMap[enriched.symbol] = enriched
+                                _readyToTradeProgress.value = done.incrementAndGet() to top20.size
+                                _readyToTradeResults.value = UiState.Success(
+                                    stockMap.values.sortedWith(compareBy { oversoldRank(it) })
+                                )
+                            }
+                        }.awaitAll()
+                    }
+                    _readyToTradeProgress.value = null
+                },
+                onFailure = { _readyToTradeResults.value = UiState.Error(it.message ?: "Scan failed") },
+            )
+        }
+    }
+
+    /** Sort oversold results: bounce candidates first (WAIT/BUY + no negative news), AVOID last */
+    private fun oversoldRank(stock: StockData): Int {
+        val hasNegativeNews = stock.news?.sentiment == com.nseassist.data.model.NewsSentiment.NEGATIVE
+        return when {
+            hasNegativeNews -> 2                                          // bad news → bottom
+            stock.quickTake?.action?.startsWith("Avoid", ignoreCase = true) == true -> 2
+            stock.quickTake != null -> 0                                  // bounce candidate → top
+            else -> 1
         }
     }
 
@@ -324,6 +393,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             )
             _stockNews.value = UiState.Success(news)
         }
+    }
+
+    fun setTestMorningSelloff(enabled: Boolean) {
+        aiSettingsStore.saveTestMorningSelloff(enabled)
+        _testMorningSelloff.value = enabled
     }
 
     fun upsertAiProvider(provider: AiProvider, apiKey: String, model: String) {

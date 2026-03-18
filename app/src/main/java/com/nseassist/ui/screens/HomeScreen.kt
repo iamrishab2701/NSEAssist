@@ -56,6 +56,7 @@ fun HomeScreen(navController: NavController, vm: MainViewModel) {
     val marketState by vm.marketOverview.collectAsState()
     val trendsState by vm.globalTrends.collectAsState()
     val aiSettings by vm.aiSettings.collectAsState()
+    val testMorningSelloff by vm.testMorningSelloff.collectAsState()
     var capital by remember { mutableStateOf("") }
     var stockQuery by remember { mutableStateOf("") }
     var selectedCategory by rememberSaveable { mutableStateOf(ScanCategory.ALL.routeValue) }
@@ -132,6 +133,7 @@ fun HomeScreen(navController: NavController, vm: MainViewModel) {
                         capital = capital,
                         category = currentCategory,
                         scanMode = scanMode,
+                        testMorningSelloff = testMorningSelloff,
                         onCapitalChange = { capital = it },
                         onCategoryChange = { selectedCategory = it.routeValue },
                         onScanModeChange = { scanMode = it },
@@ -323,13 +325,23 @@ private fun CapitalInputCard(
     capital: String,
     category: ScanCategory,
     scanMode: String,
+    testMorningSelloff: Boolean = false,
     onCapitalChange: (String) -> Unit,
     onCategoryChange: (ScanCategory) -> Unit,
     onScanModeChange: (String) -> Unit,
     onScan: () -> Unit,
 ) {
-    val isBreakouts = scanMode == "breakouts"
-    val isReadyToTrade = scanMode == "trade"
+    val isBreakouts     = scanMode == "breakouts"
+    val isReadyToTrade  = scanMode == "trade"
+    val isOversold      = scanMode == "oversold"
+
+    // Morning Selloff only active 9:15 AM – 12:00 PM IST on weekdays (bypass via test mode)
+    val isMorningSelloffTime = testMorningSelloff || remember {
+        val ist  = java.time.ZonedDateTime.now(java.time.ZoneId.of("Asia/Kolkata"))
+        val dow  = ist.dayOfWeek.value          // 1=Mon … 7=Sun
+        val mins = ist.hour * 60 + ist.minute
+        dow < 6 && mins >= 9 * 60 + 15 && mins < 12 * 60
+    }
 
     Card(colors = CardDefaults.cardColors(containerColor = CardDark), modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -345,17 +357,28 @@ private fun CapitalInputCard(
                 keyboardActions = KeyboardActions(onDone = { onScan() }),
                 modifier = Modifier.fillMaxWidth(),
             )
-            Text("Stock Type", fontWeight = FontWeight.SemiBold, fontSize = 14.sp, color = TextPrimary)
+            Text(
+                "Stock Type",
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 14.sp,
+                color = if (isOversold) TextSecondary.copy(alpha = 0.4f) else TextPrimary,
+            )
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 ScanCategory.values().forEach { option ->
                     FilterChip(
                         selected = category == option,
-                        onClick = { onCategoryChange(option) },
+                        onClick = { if (!isOversold) onCategoryChange(option) },
+                        enabled = !isOversold,
                         label = { Text(option.label) },
                     )
                 }
             }
-            Text(category.helperText, color = TextSecondary, fontSize = 12.sp)
+            Text(
+                if (isOversold) "Morning Selloff scans Large, Mid & Small Cap — stock type ignored"
+                else category.helperText,
+                color = if (isOversold) AmberWarn.copy(alpha = 0.8f) else TextSecondary,
+                fontSize = 12.sp,
+            )
 
             // ── Ready for Breakouts toggle ────────────────────────────────────
             ScanModeToggle(
@@ -381,6 +404,20 @@ private fun CapitalInputCard(
                 activeColor = GreenBull,
             )
 
+            // ── Morning Selloff toggle (oversold bounce) ───────────────────────
+            ScanModeToggle(
+                title = "Morning Selloff",
+                description = when {
+                    isOversold          -> "Large, Mid & Small Cap · 50–70% daily volume sold · bounce expected"
+                    isMorningSelloffTime -> "Large, Mid & Small Cap stocks heavily sold this morning — bounce watch"
+                    else                -> "Only active 9:15 AM – 12:00 PM · market must be open"
+                },
+                checked = isOversold,
+                onCheckedChange = { onScanModeChange(if (it) "oversold" else "normal") },
+                activeColor = AmberWarn,
+                enabled = isMorningSelloffTime || isOversold,
+            )
+
             Button(
                 onClick = onScan,
                 enabled = (capital.toDoubleOrNull() ?: 0.0) > 0,
@@ -389,6 +426,7 @@ private fun CapitalInputCard(
                     containerColor = when (scanMode) {
                         "trade"     -> GreenBull
                         "breakouts" -> BluePrimary
+                        "oversold"  -> AmberWarn
                         else        -> BluePrimary
                     },
                     contentColor = Color.White,
@@ -396,9 +434,10 @@ private fun CapitalInputCard(
             ) {
                 Text(
                     when (scanMode) {
-                        "trade"     -> "Find Ready to Trade Stocks"
-                        "breakouts" -> "Find Breakout Stocks"
-                        else        -> "Scan Affordable Stocks"
+                        "trade"    -> "Find Ready to Trade Stocks"
+                        "breakouts"-> "Find Breakout Stocks"
+                        "oversold" -> "Find Morning Selloff Stocks"
+                        else       -> "Scan Affordable Stocks"
                     },
                     fontWeight = FontWeight.Bold,
                 )
@@ -414,10 +453,15 @@ private fun ScanModeToggle(
     checked: Boolean,
     onCheckedChange: (Boolean) -> Unit,
     activeColor: Color,
+    enabled: Boolean = true,
 ) {
     Surface(
         shape = RoundedCornerShape(10.dp),
-        color = if (checked) activeColor.copy(alpha = 0.10f) else SurfaceDark,
+        color = when {
+            checked  -> activeColor.copy(alpha = 0.10f)
+            !enabled -> SurfaceDark.copy(alpha = 0.5f)
+            else     -> SurfaceDark
+        },
         modifier = Modifier.fillMaxWidth(),
     ) {
         Row(
@@ -432,13 +476,18 @@ private fun ScanModeToggle(
                     title,
                     fontWeight = FontWeight.SemiBold,
                     fontSize = 14.sp,
-                    color = if (checked) activeColor else TextPrimary,
+                    color = when {
+                        checked  -> activeColor
+                        !enabled -> TextSecondary.copy(alpha = 0.5f)
+                        else     -> TextPrimary
+                    },
                 )
-                Text(description, color = TextSecondary, fontSize = 11.sp)
+                Text(description, color = TextSecondary.copy(alpha = if (enabled) 1f else 0.5f), fontSize = 11.sp)
             }
             Switch(
                 checked = checked,
                 onCheckedChange = onCheckedChange,
+                enabled = enabled,
                 colors = SwitchDefaults.colors(
                     checkedThumbColor = activeColor,
                     checkedTrackColor = activeColor.copy(alpha = 0.3f),

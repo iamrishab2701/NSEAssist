@@ -26,11 +26,18 @@ class AiSettingsStore(context: Context) {
             .apply()
     }
 
+    fun loadTestMorningSelloff(): Boolean = prefs.getBoolean(KEY_TEST_MORNING_SELLOFF, false)
+
+    fun saveTestMorningSelloff(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_TEST_MORNING_SELLOFF, enabled).apply()
+    }
+
     private fun apiKey(provider: AiProvider) = "${provider.routeValue}_api_key"
 
     private fun modelKey(provider: AiProvider) = "${provider.routeValue}_model"
 
     companion object {
         private const val PREFS_NAME = "ai_settings"
+        private const val KEY_TEST_MORNING_SELLOFF = "test_morning_selloff"
     }
 }
