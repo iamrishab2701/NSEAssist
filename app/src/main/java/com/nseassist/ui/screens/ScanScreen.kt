@@ -12,6 +12,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -63,11 +64,12 @@ fun ScanScreen(
     var sortOption by remember { mutableStateOf(ScanSortOption.SCORE) }
     var showProviderPicker by remember { mutableStateOf(false) }
 
-    val isDeepScan = scanMode == "breakouts" || scanMode == "trade"
+    val isDeepScan = scanMode == "breakouts" || scanMode == "trade" || scanMode == "oversold"
     LaunchedEffect(capital, category, scanMode) {
         when (scanMode) {
             "trade"     -> vm.scanReadyToTrade(capital, category, orbBreakoutMode = true)
             "breakouts" -> vm.scanReadyToTrade(capital, category, orbBreakoutMode = false)
+            "oversold"  -> vm.scanOversoldBounce(capital)
             else        -> vm.scanStocks(capital, category)
         }
     }
@@ -79,15 +81,41 @@ fun ScanScreen(
                 title = {
                     Text(
                         when (scanMode) {
-                            "trade"     -> "Ready to Trade  ·  ₹${String.format("%,.0f", capital)}"
-                            "breakouts" -> "Breakouts  ·  ₹${String.format("%,.0f", capital)}"
-                            else        -> "${category.label} Stocks  ·  ₹${String.format("%,.0f", capital)}"
+                            "trade"    -> "Ready to Trade  ·  ₹${String.format("%,.0f", capital)}"
+                            "breakouts"-> "Breakouts  ·  ₹${String.format("%,.0f", capital)}"
+                            "oversold" -> "Morning Selloff  ·  ₹${String.format("%,.0f", capital)}"
+                            else       -> "${category.label} Stocks  ·  ₹${String.format("%,.0f", capital)}"
                         }
                     )
                 },
                 navigationIcon = {
                     IconButton(onClick = { navController.popBackStack() }) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back")
+                    }
+                },
+                actions = {
+                    if (isDeepScan) {
+                        val isScanning = rttProgress != null || rttState is UiState.Loading
+                        IconButton(
+                            onClick = {
+                                when (scanMode) {
+                                    "trade"     -> vm.scanReadyToTrade(capital, category, orbBreakoutMode = true)
+                                    "breakouts" -> vm.scanReadyToTrade(capital, category, orbBreakoutMode = false)
+                                    "oversold"  -> vm.scanOversoldBounce(capital)
+                                }
+                            },
+                            enabled = !isScanning,
+                        ) {
+                            if (isScanning) {
+                                CircularProgressIndicator(
+                                    modifier    = Modifier.size(20.dp),
+                                    color       = TextSecondary,
+                                    strokeWidth = 2.dp,
+                                )
+                            } else {
+                                Icon(Icons.Default.Refresh, contentDescription = "Refresh scan", tint = TextSecondary)
+                            }
+                        }
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = CardDark),
@@ -99,12 +127,19 @@ fun ScanScreen(
         when (val state = activeState) {
             is UiState.Loading -> Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    CircularProgressIndicator(color = if (scanMode == "trade") GreenBull else BluePrimary)
+                    CircularProgressIndicator(
+                        color = when (scanMode) {
+                            "trade"    -> GreenBull
+                            "oversold" -> AmberWarn
+                            else       -> BluePrimary
+                        }
+                    )
                     Text(
                         when (scanMode) {
-                            "trade"     -> "Finding Ready to Trade stocks…"
-                            "breakouts" -> "Finding Breakout stocks…"
-                            else        -> "Scanning NSE market…"
+                            "trade"    -> "Finding Ready to Trade stocks…"
+                            "breakouts"-> "Finding Breakout stocks…"
+                            "oversold" -> "Scanning for Morning Selloff stocks…"
+                            else       -> "Scanning NSE market…"
                         },
                         color = TextSecondary, fontWeight = FontWeight.SemiBold,
                     )

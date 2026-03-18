@@ -49,11 +49,11 @@ android {
             firebaseAppDistribution {
                 releaseNotes = """v${appVersionName} — What's new:
 
-• Paper Trade Memory — log AI picks as paper trades, track outcomes (win/loss/open) via Performance screen
-• Signal Replay — backtest RSI/VWAP/MACD signals on 90-day history for any deep-enriched stock
-• Global Trends v2 — Indian ADRs section (INFY/WIPRO/HDFCBANK/ICICIBANK/DRREDDY/TATAMOTORS) with overnight US moves; Crude Oil & Gold impact cards; STRONG/MODERATE correlation badges
-• News — expanded to 22 RSS sources, 12h intraday window (was 24h), stronger sentiment keywords
-• Log Paper Trade button on AI Report primary pick"""
+• Morning Selloff scan — finds stocks down ≥4% with heavy selling volume (≥50% avg daily) and below VWAP
+• Works 9:15 AM–12:00 PM IST on weekdays — potential bounce candidates
+• Stock Type filter auto-disabled in Morning Selloff mode (scans all caps)
+• Developer Settings — test mode toggle to bypass Morning Selloff time restriction
+• Capital filter applied after screener — shows only stocks you can afford"""
                 groups       = "testers"
             }
         }

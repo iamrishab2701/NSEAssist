@@ -719,9 +719,26 @@ class NSERepository {
         val isBearish = stock.optionAction == "AVOID" ||
                         thirtyMinCandle?.signal == TechnicalIndicators.CandleSignal.BEARISH
 
-        val entryPrice  = if (isBullish) ltp + atr * 0.1 else ltp - atr * 0.1
-        val targetPrice = if (isBullish) ltp + atr * 1.2 else ltp - atr * 1.2
-        val stopPrice   = if (isBullish) ltp - atr * 0.6 else ltp + atr * 0.6
+        val entryPrice = if (isBullish) ltp + atr * 0.1 else ltp - atr * 0.1
+        val atrTarget  = ltp + atr * 1.2
+        val atrStop    = ltp - atr * 0.6
+
+        // Use pivot R1 as target if it's above LTP and reachable today (within 8%)
+        // Use pivot R2 if LTP has already crossed R1
+        // Fallback to ATR-based target when pivots are unavailable or too far away
+        val targetPrice = when {
+            isBullish && pivots != null && pivots.r1 > ltp && pivots.r1 <= ltp * 1.08 -> pivots.r1
+            isBullish && pivots != null && ltp >= pivots.r1 && pivots.r2 > ltp        -> pivots.r2
+            isBullish -> atrTarget
+            else      -> ltp - atr * 1.2
+        }
+
+        // Use S1 as stop only when it sits between the ATR stop and LTP (valid support zone)
+        val stopPrice = when {
+            isBullish && pivots != null && pivots.s1 in atrStop..ltp -> pivots.s1
+            isBullish -> atrStop
+            else      -> ltp + atr * 0.6
+        }
 
         val targetPct   = (targetPrice - entryPrice) / entryPrice * 100
         val stopPct     = kotlin.math.abs(entryPrice - stopPrice) / entryPrice * 100
@@ -737,23 +754,23 @@ class NSERepository {
 
         // ── WHY ───────────────────────────────────────────────────────────────
         val rsiDesc = when {
-            stock.rsi > 70  -> "RSI is high (${stock.rsi.toInt()}) — stock may be overbought, keep targets tight."
-            stock.rsi < 35  -> "RSI is low (${stock.rsi.toInt()}) — stock is oversold, could bounce."
-            stock.rsi in 45.0..65.0 -> "RSI is in the sweet spot (${stock.rsi.toInt()}) — good momentum."
-            else            -> "RSI is at ${stock.rsi.toInt()} — neutral zone."
+            stock.rsi > 70  -> "The stock has risen a lot recently — it may need a pause. Keep your profit target short."
+            stock.rsi < 35  -> "The stock has fallen sharply and may bounce back up soon."
+            stock.rsi in 45.0..65.0 -> "The stock has healthy momentum right now — a good sign."
+            else            -> "The stock's momentum is neutral — no strong signal either way."
         }
-        val volumeDesc = if (stock.volumeSpike) "Volume spiked — big players are active." else "Volume is normal."
+        val volumeDesc = if (stock.volumeSpike) "Today's trading is much busier than usual — big buyers or sellers are active." else "Trading volume is normal today."
         val pivotDesc  = when {
-            pivots != null && ltp > pivots.r1  -> "Price is above R1 resistance (${fmt(pivots.r1)}) — momentum is strong."
-            pivots != null && ltp < pivots.s1  -> "Price is below S1 support (${fmt(pivots.s1)}) — weak zone."
-            pivots != null && ltp > pivots.cpp -> "Price is above the central pivot (${fmt(pivots.cpp)}) — mild bullish."
-            pivots != null                     -> "Price is below the central pivot (${fmt(pivots.cpp)}) — mild bearish."
+            pivots != null && ltp > pivots.r1  -> "Price has pushed past a key level (${fmt(pivots.r1)}) — momentum is strong today."
+            pivots != null && ltp < pivots.s1  -> "Price has fallen below a key level (${fmt(pivots.s1)}) — the stock is in a weak zone today."
+            pivots != null && ltp > pivots.cpp -> "Price is above today's midpoint (${fmt(pivots.cpp)}) — buyers are slightly in control."
+            pivots != null                     -> "Price is below today's midpoint (${fmt(pivots.cpp)}) — sellers are slightly in control."
             else -> ""
         }
         val orbDesc = when {
-            hasResistanceBreakout -> "Price broke above 30-day swing resistance (${fmt(stock.resistance)}) — real-time breakout."
-            stock.orbHigh > 0 && ltp > stock.orbHigh -> "Price broke above the morning range (ORB: ${fmt(stock.orbHigh)}) — strong signal."
-            stock.orbLow  > 0 && ltp < stock.orbLow  -> "Price fell below the morning range (ORB: ${fmt(stock.orbLow)}) — bearish signal."
+            hasResistanceBreakout -> "The stock just broke above a price level (${fmt(stock.resistance)}) it couldn't cross in the last month — strong buying signal."
+            stock.orbHigh > 0 && ltp > stock.orbHigh -> "Price broke above the morning's trading range (${fmt(stock.orbHigh)}) — bullish signal."
+            stock.orbLow  > 0 && ltp < stock.orbLow  -> "Price fell below the morning's trading range (${fmt(stock.orbLow)}) — avoid buying."
             else -> ""
         }
 
@@ -765,10 +782,10 @@ class NSERepository {
 
         // ── WARNING ───────────────────────────────────────────────────────────
         val warning = when {
-            stock.rsi > 68  -> "RSI is near overbought — keep your stop loss tight, don't chase."
-            stock.rsi < 32  -> "RSI is near oversold — wait for a bounce confirmation before buying."
-            !stock.aboveVwap && isBullish -> "Price is below VWAP — only buy if it crosses VWAP first."
-            else -> "Exit immediately if price closes below ${fmt(if (isBullish) stopPrice else ltp - atr)} on a 15-min candle."
+            stock.rsi > 68  -> "The stock has already risen a lot today. Don't buy if it keeps jumping — wait for a small dip first."
+            stock.rsi < 32  -> "The stock has been falling. Wait for it to start going back up before buying — don't buy while it's still dropping."
+            !stock.aboveVwap && isBullish -> "The price is still below today's average. Only buy if it crosses above ${fmt(stock.vwap)} first."
+            else -> "Exit immediately if price falls below ${fmt(if (isBullish) stopPrice else ltp - atr)} — that means the trade is not working."
         }
 
         // ── CONFIDENCE (session-adjusted) ────────────────────────────────────
