@@ -126,7 +126,9 @@ data class StockData(
     val supertrendSignal: String = "NEUTRAL",    // BUY / SELL / NEUTRAL (on 15-min)
     val pivotCpp: Double = 0.0,                  // Central Pivot Point
     val pivotR1: Double = 0.0,                   // Resistance 1
+    val pivotR2: Double = 0.0,                   // Resistance 2
     val pivotS1: Double = 0.0,                   // Support 1
+    val pivotS2: Double = 0.0,                   // Support 2
     val sessionPhase: String = "UNKNOWN",        // MORNING / MIDDAY / AFTERNOON / CLOSED
 
     // Plain-English summary card (generated after 15-min data is available)
@@ -160,6 +162,7 @@ data class MarketOverview(
     val bankNiftyChangePct: Double,
     val niftyAboveVwap: Boolean,
     val bankNiftyAboveVwap: Boolean,
+    val indiaVix: Double = 0.0,
     val marketStatus: MarketStatus,
     val topGainers: List<MoverItem>,
     val topLosers: List<MoverItem>,

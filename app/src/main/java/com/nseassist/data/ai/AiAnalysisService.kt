@@ -49,10 +49,11 @@ class AiAnalysisService {
         capital: Double,
         category: ScanCategory,
         stocks: List<StockData>,
+        vix: Double = 0.0,
     ): Result<AiAnalysisReport> = withContext(Dispatchers.IO) { runCatching {
         require(config.apiKey.isNotBlank()) { "API key missing for ${config.provider.label}" }
         require(stocks.isNotEmpty()) { "No stocks available for AI analysis" }
-        AppLogger.d("AI", "Batch analysis — ${config.provider.label} model=${config.model} stocks=${stocks.size} capital=₹$capital category=${category.routeValue}")
+        AppLogger.d("AI", "Batch analysis — ${config.provider.label} model=${config.model} stocks=${stocks.size} capital=₹$capital category=${category.routeValue} vix=${"%.2f".format(vix)}")
 
         // Fetch historical context for top 5 candidates in parallel (4 s timeout each)
         val topSymbols = stocks.sortedByDescending { it.score }.take(5).map { it.symbol }
@@ -64,7 +65,7 @@ class AiAnalysisService {
             }
         }
 
-        val prompt = buildBatchPrompt(capital, category, stocks, contextMap)
+        val prompt = buildBatchPrompt(capital, category, stocks, contextMap, vix)
         val rawResponse = callProvider(config, SYSTEM_PROMPT, prompt)
         val report = parseReport(rawResponse, config)
         AppLogger.d("AI", "Batch done — primary pick: ${report.primaryPick.symbol} ${report.primaryPick.direction} confidence=${report.primaryPick.confidence}%")
@@ -103,14 +104,15 @@ class AiAnalysisService {
         capital: Double,
         stock: StockData,
         news: NewsResult?,
+        vix: Double = 0.0,
     ): Result<SingleStockAiAnalysis> = withContext(Dispatchers.IO) { runCatching {
         require(config.apiKey.isNotBlank()) { "API key missing for ${config.provider.label}" }
-        AppLogger.d("AI", "Single-stock — ${config.provider.label} ${stock.symbol} LTP=₹${stock.ltp}")
+        AppLogger.d("AI", "Single-stock — ${config.provider.label} ${stock.symbol} LTP=₹${stock.ltp} vix=${"%.2f".format(vix)}")
 
         // Fetch historical context for this stock (4 s timeout, non-blocking on failure)
         val context = MemoryClient.getAiContext(stock.symbol)
 
-        val prompt = buildSingleStockPrompt(capital, stock, news, context)
+        val prompt = buildSingleStockPrompt(capital, stock, news, context, vix)
         val rawResponse = callProvider(config, SINGLE_STOCK_SYSTEM_PROMPT, prompt)
         val result = parseSingleStockReport(rawResponse, config)
         AppLogger.d("AI", "Single-stock done — ${stock.symbol} verdict=${result.verdict} direction=${result.direction} confidence=${result.confidence}%")
@@ -368,6 +370,7 @@ class AiAnalysisService {
         stock: StockData,
         news: NewsResult?,
         context: StockAiContext? = null,
+        vix: Double = 0.0,
     ): String {
         val qty     = if (stock.ltp > 0) kotlin.math.floor(capital / stock.ltp).toInt() else 0
         val maxLoss = capital * 0.02
@@ -400,6 +403,15 @@ class AiAnalysisService {
             appendLine("Current Time (IST) : $timeStr  |  $dateStr")
             appendLine("NSE Market Status  : $marketStatus")
             appendLine("Session Context    : $sessionNote")
+            if (vix > 0.0) {
+                val vixLabel = when {
+                    vix >= 20.0 -> "DANGER — market too volatile, tighten stops severely"
+                    vix >= 17.0 -> "HIGH — caution, tighten stops by 20%"
+                    vix >= 13.0 -> "NORMAL — trade as planned"
+                    else        -> "LOW — very calm, ideal conditions"
+                }
+                appendLine("India VIX          : ${"%.2f".format(vix)}  [$vixLabel]")
+            }
             appendLine()
             appendLine("Capital Available : Rs ${"%.2f".format(capital)}")
             appendLine("Max Loss (2% rule): Rs ${"%.2f".format(maxLoss)}")
@@ -521,14 +533,16 @@ class AiAnalysisService {
             }
             appendLine("Supertrend (15m): ${stock.supertrendSignal}  (BUY=price above band/bullish, SELL=price below band/bearish)")
             if (stock.pivotCpp > 0.0) {
-                appendLine("Pivot CPP       : Rs ${"%.2f".format(stock.pivotCpp)}")
-                appendLine("Pivot R1        : Rs ${"%.2f".format(stock.pivotR1)}")
-                appendLine("Pivot S1        : Rs ${"%.2f".format(stock.pivotS1)}")
+                appendLine("Pivot CPP       : Rs ${"%.2f".format(stock.pivotCpp)}  (daily neutral level)")
+                appendLine("Pivot R1        : Rs ${"%.2f".format(stock.pivotR1)}  (first resistance / initial target)")
+                if (stock.pivotR2 > 0.0) appendLine("Pivot R2        : Rs ${"%.2f".format(stock.pivotR2)}  (extended target if R1 broken)")
+                appendLine("Pivot S1        : Rs ${"%.2f".format(stock.pivotS1)}  (first support / stop zone)")
+                if (stock.pivotS2 > 0.0) appendLine("Pivot S2        : Rs ${"%.2f".format(stock.pivotS2)}  (strong support if S1 broken)")
                 val pivotStatus = when {
-                    stock.ltp > stock.pivotR1  -> "Above R1 — strong bullish momentum"
-                    stock.ltp < stock.pivotS1  -> "Below S1 — weak/bearish zone"
-                    stock.ltp > stock.pivotCpp -> "Above CPP — mild bullish bias"
-                    else                       -> "Below CPP — mild bearish bias"
+                    stock.ltp > stock.pivotR1  -> "Above R1 — strong bullish momentum, target R2"
+                    stock.ltp < stock.pivotS1  -> "Below S1 — weak/bearish zone, watch S2"
+                    stock.ltp > stock.pivotCpp -> "Above CPP — mild bullish bias, target R1"
+                    else                       -> "Below CPP — mild bearish bias, watch S1"
                 }
                 appendLine("Price vs Pivot  : $pivotStatus")
             }
@@ -582,6 +596,7 @@ class AiAnalysisService {
         category: ScanCategory,
         stocks: List<StockData>,
         contextMap: Map<String, StockAiContext> = emptyMap(),
+        vix: Double = 0.0,
     ): String {
         val stockLines = stocks.joinToString("\n") { stock ->
             buildString {
@@ -683,9 +698,20 @@ class AiAnalysisService {
             }
         }
 
+        val vixLine = if (vix > 0.0) {
+            val vixLabel = when {
+                vix >= 20.0 -> "DANGER — recommend skipping or cutting positions; market is in high fear mode"
+                vix >= 17.0 -> "HIGH — caution, tighten all stop losses by 20%"
+                vix >= 13.0 -> "NORMAL — trade as planned"
+                else        -> "LOW — very calm, ideal conditions"
+            }
+            "India VIX: ${"%.2f".format(vix)}  [$vixLabel]"
+        } else ""
+
         return """
             Capital: Rs ${"%.2f".format(capital)}
             Category: ${category.label}
+            ${if (vixLine.isNotBlank()) vixLine else ""}
             Objective: Predict the strongest next intraday setups from the supplied list. Provide 1 strong primary pick and up to 2 additional candidates. The best answer can be LONG, SHORT, reversal, continuation, or NO_TRADE setups.
             Rules:
             - Choose only affordable stocks with ltp less than or equal to capital.
@@ -693,6 +719,7 @@ class AiAnalysisService {
             - Prefer prediction quality over blunt momentum following.
             - Primary pick is the main trade. Additional candidates are for watching, not simultaneous trading.
             - Total picks including primary must not exceed 3.
+            - If India VIX >= 20, strongly prefer NO_TRADE or reduce confidence on all picks by at least 15 points.
 
             Stocks:
             $stockLines
@@ -772,8 +799,9 @@ Signal interpretation guide:
 - intraday15m: 15-min candle pattern + signal (most time-sensitive — prioritize for same-session entries; BULLISH patterns favor long, BEARISH favor short/avoid)
 - supertrend15m: BUY = price above Supertrend band (bullish momentum on 15-min), SELL = below band (bearish)
 - orbStatus: ABOVE_ORB = bullish breakout above 9:15-9:45 AM opening range, BELOW_ORB = bearish breakdown, INSIDE_ORB = consolidating, wait for direction
-- pivotPos: ABOVE_R1 = strong momentum, ABOVE_CPP = mild bullish, BELOW_CPP = mild bearish, BELOW_S1 = weak/avoid long
+- pivotPos: ABOVE_R1 = strong momentum (target R2), ABOVE_CPP = mild bullish (target R1), BELOW_CPP = mild bearish (watch S1), BELOW_S1 = weak/avoid long (watch S2)
 - session: MORNING = strongest momentum (best for entries), MIDDAY = slower/choppy (tighten targets), AFTERNOON = late session (ride trends only), CLOSED = next session analysis
+- India VIX: <13 = very calm ideal, 13-17 = normal, 17-20 = high caution (tighten stops), >=20 = danger (prefer NO_TRADE, reduce confidence)
 
 Rules:
 - Pick only from the provided list.

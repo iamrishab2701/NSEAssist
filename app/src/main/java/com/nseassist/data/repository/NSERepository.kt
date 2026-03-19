@@ -52,17 +52,33 @@ class NSERepository {
     private var niftyConditionTimestamp = 0L
     private val NIFTY_TTL = 300_000L   // 5 minutes
 
+    // India VIX cached from the last market overview fetch — used to adjust ATR multiplier in predictions
+    private var cachedVix: Double = 0.0
+
     // ── Market Overview ─────────────────────────────────────────────────────────
 
     suspend fun getMarketOverview(): Result<MarketOverview> = withContext(Dispatchers.IO) {
         runCatching {
-            // One batch call gets both benchmark indices
+            // One batch call gets both benchmark indices + India VIX
             val indices = withTimeoutOrNull(20_000L) {
-                YahooFinanceClient.getBatchQuotes(listOf("^NSEI", "^NSEBANK"))
+                YahooFinanceClient.getBatchQuotes(listOf("^NSEI", "^NSEBANK", "^INDIAVIX"))
             } ?: emptyList()
 
             val nifty     = indices.firstOrNull { it.symbol == "^NSEI" }
             val bankNifty = indices.firstOrNull { it.symbol == "^NSEBANK" }
+            val vixQuote  = indices.firstOrNull { it.symbol == "^INDIAVIX" }
+            val vix       = vixQuote?.price ?: 0.0
+
+            val vixLabel = when {
+                vix <= 0.0  -> "Unavailable"
+                vix < 13.0  -> "Very Calm"
+                vix < 17.0  -> "Normal"
+                vix < 20.0  -> "Caution"
+                else        -> "DANGER"
+            }
+            AppLogger.d("VIX", "India VIX = ${String.format("%.2f", vix)} → $vixLabel")
+            if (vix >= 20.0) AppLogger.w("VIX", "VIX ≥ 20 — high volatility, consider skipping trades today")
+            if (vix > 0.0) cachedVix = vix   // cache for prediction refinement
 
             // Fetch screener once — shared by both gainers and losers sort
             val screenerQuotes = withTimeoutOrNull(30_000L) {
@@ -83,6 +99,7 @@ class NSERepository {
                 bankNiftyChangePct = bankNifty?.changePct ?: 0.0,
                 niftyAboveVwap     = (nifty?.price ?: 0.0) > niftyVwap,
                 bankNiftyAboveVwap = (bankNifty?.price ?: 0.0) > bankNiftyVwap,
+                indiaVix           = vix,
                 marketStatus       = currentMarketStatus(),
                 topGainers         = gainers,
                 topLosers          = losers,
@@ -383,7 +400,9 @@ class NSERepository {
                 )
             } else null
 
+            val pivotSource: String
             val pivots = if ((intraday?.pivotCpp ?: 0.0) > 0) {
+                pivotSource = "intraday"
                 TechnicalIndicators.PivotPoints(
                     cpp = intraday!!.pivotCpp,
                     r1  = intraday.pivotR1,
@@ -392,20 +411,42 @@ class NSERepository {
                     s2  = intraday.pivotS2,
                 )
             } else if (highs.size >= 2) {
-                // Fallback: compute pivots from daily history if intraday unavailable
+                pivotSource = "daily-fallback"
                 val pH = highs.dropLast(1).last()
                 val pL = lows.dropLast(1).last()
                 val pC = closes.dropLast(1).last()
                 indicators.pivotPoints(pH, pL, pC)
-            } else null
+            } else {
+                pivotSource = "none"
+                null
+            }
+            if (pivots != null) {
+                AppLogger.d("PIVOT", "$cleanSymbol → Pivot=₹${String.format("%.2f", pivots.cpp)} R1=₹${String.format("%.2f", pivots.r1)} R2=₹${String.format("%.2f", pivots.r2)} S1=₹${String.format("%.2f", pivots.s1)} S2=₹${String.format("%.2f", pivots.s2)} (source=$pivotSource)")
+            } else {
+                AppLogger.w("PIVOT", "$cleanSymbol → Pivot unavailable (insufficient data)")
+            }
 
             val sessionPhase = currentSessionPhase()
 
-            // Nudge prediction confidence based on 15-min candle + Supertrend signal
-            val nudgedConfidence = nudgeConfidence(
-                base          = prediction.confidence,
-                candleSignal  = thirtyMinCandle?.signal,
-                supertrendSig = supertrend30m?.signal ?: "NEUTRAL",
+            // Refine prediction using all 6 accuracy improvements
+            val refined = refinePrediction(
+                raw                   = prediction,
+                symbol                = cleanSymbol,
+                ltp                   = ltp,
+                atr                   = atr,
+                pivots                = pivots,
+                orbHigh               = intraday?.orbHigh ?: 0.0,
+                orbLow                = intraday?.orbLow  ?: 0.0,
+                dailyCandleSignal     = candleResult.signal,
+                thirtyMinCandleSignal = thirtyMinCandle?.signal,
+                supertrendSignal      = supertrend30m?.signal ?: "NEUTRAL",
+                adx                   = adxResult.adx,
+                adxDiPlus             = adxResult.diPlus,
+                adxDiMinus            = adxResult.diMinus,
+                aboveVwap             = aboveVwap,
+                rsi                   = rsi,
+                macdLine              = macdLine,
+                macdSignal            = macdSignal,
             )
 
             val stockData = StockData(
@@ -421,10 +462,10 @@ class NSERepository {
                 trendSignalType      = trend.type,
                 trendSignalLabel     = trend.label,
                 streakDays           = trend.streakDays,
-                predictedHigh        = prediction.high,
-                predictedLow         = prediction.low,
-                predictedDirection   = prediction.direction,
-                predictionConfidence = nudgedConfidence,
+                predictedHigh        = refined.high,
+                predictedLow         = refined.low,
+                predictedDirection   = refined.direction,
+                predictionConfidence = refined.confidence,
                 atr         = atr,
                 bollingerUpper  = bollinger.upper,
                 bollingerMiddle = bollinger.middle,
@@ -452,7 +493,9 @@ class NSERepository {
                 supertrendSignal    = supertrend30m?.signal ?: "NEUTRAL",
                 pivotCpp            = pivots?.cpp ?: 0.0,
                 pivotR1             = pivots?.r1  ?: 0.0,
+                pivotR2             = pivots?.r2  ?: 0.0,
                 pivotS1             = pivots?.s1  ?: 0.0,
+                pivotS2             = pivots?.s2  ?: 0.0,
                 sessionPhase        = sessionPhase,
             )
 
@@ -607,7 +650,9 @@ class NSERepository {
                     )
                 } else null
 
+                val pivotSource2: String
                 val pivots = if ((intraday?.pivotCpp ?: 0.0) > 0) {
+                    pivotSource2 = "intraday"
                     TechnicalIndicators.PivotPoints(
                         cpp = intraday!!.pivotCpp,
                         r1  = intraday.pivotR1,
@@ -616,19 +661,42 @@ class NSERepository {
                         s2  = intraday.pivotS2,
                     )
                 } else if (highs.size >= 2) {
+                    pivotSource2 = "daily-fallback"
                     val pH = highs.dropLast(1).last()
                     val pL = lows.dropLast(1).last()
                     val pC = closes.dropLast(1).last()
                     indicators.pivotPoints(pH, pL, pC)
-                } else null
+                } else {
+                    pivotSource2 = "none"
+                    null
+                }
+                if (pivots != null) {
+                    AppLogger.d("PIVOT", "${phase1.symbol} → Pivot=₹${String.format("%.2f", pivots.cpp)} R1=₹${String.format("%.2f", pivots.r1)} R2=₹${String.format("%.2f", pivots.r2)} S1=₹${String.format("%.2f", pivots.s1)} S2=₹${String.format("%.2f", pivots.s2)} (source=$pivotSource2)")
+                } else {
+                    AppLogger.w("PIVOT", "${phase1.symbol} → Pivot unavailable (insufficient data)")
+                }
 
                 val sessionPhase = currentSessionPhase()
 
-                // Nudge prediction confidence based on 15-min candle + Supertrend signal
-                val nudgedConfidence = nudgeConfidence(
-                    base          = prediction.confidence,
-                    candleSignal  = thirtyMinCandle?.signal,
-                    supertrendSig = supertrend30m?.signal ?: "NEUTRAL",
+                // Refine prediction using all 6 accuracy improvements
+                val refined = refinePrediction(
+                    raw                   = prediction,
+                    symbol                = phase1.symbol,
+                    ltp                   = ltp,
+                    atr                   = atr,
+                    pivots                = pivots,
+                    orbHigh               = intraday?.orbHigh ?: 0.0,
+                    orbLow                = intraday?.orbLow  ?: 0.0,
+                    dailyCandleSignal     = candleResult.signal,
+                    thirtyMinCandleSignal = thirtyMinCandle?.signal,
+                    supertrendSignal      = supertrend30m?.signal ?: "NEUTRAL",
+                    adx                   = adxResult.adx,
+                    adxDiPlus             = adxResult.diPlus,
+                    adxDiMinus            = adxResult.diMinus,
+                    aboveVwap             = ltp > vwap,
+                    rsi                   = rsi,
+                    macdLine              = macdLine,
+                    macdSignal            = macdSignal,
                 )
 
                 val stockData = phase1.copy(
@@ -641,10 +709,10 @@ class NSERepository {
                     trendSignalType  = trend.type,
                     trendSignalLabel = trend.label,
                     streakDays       = trend.streakDays,
-                    predictedHigh        = prediction.high,
-                    predictedLow         = prediction.low,
-                    predictedDirection   = prediction.direction,
-                    predictionConfidence = nudgedConfidence,
+                    predictedHigh        = refined.high,
+                    predictedLow         = refined.low,
+                    predictedDirection   = refined.direction,
+                    predictionConfidence = refined.confidence,
                     atr = atr,
                     bollingerUpper  = bollinger.upper,
                     bollingerMiddle = bollinger.middle,
@@ -669,7 +737,9 @@ class NSERepository {
                     supertrendSignal    = supertrend30m?.signal ?: "NEUTRAL",
                     pivotCpp            = pivots?.cpp ?: 0.0,
                     pivotR1             = pivots?.r1  ?: 0.0,
+                    pivotR2             = pivots?.r2  ?: 0.0,
                     pivotS1             = pivots?.s1  ?: 0.0,
+                    pivotS2             = pivots?.s2  ?: 0.0,
                     sessionPhase        = sessionPhase,
                     isDeepEnriched = true,
                 )
@@ -846,6 +916,19 @@ class NSERepository {
         val targetPct   = (targetPrice - entryPrice) / entryPrice * 100
         val stopPct     = kotlin.math.abs(entryPrice - stopPrice) / entryPrice * 100
 
+        val targetSource = when {
+            isBullish && pivots != null && pivots.r1 > ltp && pivots.r1 <= ltp * 1.08 -> "R1"
+            isBullish && pivots != null && ltp >= pivots.r1 && pivots.r2 > ltp        -> "R2"
+            isBullish -> "ATR"
+            else      -> "N/A"
+        }
+        val slSource = when {
+            isBullish && pivots != null && pivots.s1 in atrStop..ltp -> "S1"
+            isBullish -> "ATR"
+            else      -> "N/A"
+        }
+        AppLogger.d("QT", "${stock.symbol} → target=${targetSource}(${fmt(targetPrice)}) sl=${slSource}(${fmt(stopPrice)}) action=${if (isBullish) "BUY" else if (isBearish) "AVOID" else "WAIT"}")
+
         val action = when {
             hasResistanceBreakout && isBullish -> "Buy — Resistance breakout above ${fmt(stock.resistance)}"
             isBullish -> "Buy above ${fmt(entryPrice)}"
@@ -937,21 +1020,177 @@ class NSERepository {
      * Both signals agree bearish  → −15 pts.  One bearish signal → −8 pts.
      * No 30-min data available    → unchanged.
      */
-    private fun nudgeConfidence(
-        base: Int,
-        candleSignal: TechnicalIndicators.CandleSignal?,
-        supertrendSig: String,
-    ): Int {
-        val candleBull = candleSignal == TechnicalIndicators.CandleSignal.BULLISH
-        val candleBear = candleSignal == TechnicalIndicators.CandleSignal.BEARISH
-        val stBull     = supertrendSig == "BUY"
-        val stBear     = supertrendSig == "SELL"
-        return when {
-            candleBull && stBull -> (base + 10).coerceIn(0, 100)
-            candleBear && stBear -> (base - 15).coerceIn(0, 100)
-            candleBull || stBull -> (base + 5).coerceIn(0, 100)
-            candleBear || stBear -> (base - 8).coerceIn(0, 100)
-            else                 -> base
+    /**
+     * Refines raw linear-regression prediction using 6 accuracy improvements:
+     * 1. Pivot-anchored high/low — R1/S1/CPP as natural intraday boundaries
+     * 2. VIX-adjusted ATR multiplier — widen range on high-fear days
+     * 3. Candlestick pattern direction adjustment — strong patterns override regression direction
+     * 4. ORB-based range tightening — clamp range when breakout/breakdown is confirmed
+     * 5. Signal alignment confidence boost — reward when multiple indicators agree
+     * 6. ADX-adjusted confidence — stronger trend = higher confidence; choppy = lower
+     *
+     * Also supersedes nudgeConfidence (15-min candle + supertrend now handled in #5).
+     */
+    private fun refinePrediction(
+        raw: TechnicalIndicators.PricePrediction,
+        symbol: String,
+        ltp: Double,
+        atr: Double,
+        pivots: TechnicalIndicators.PivotPoints?,
+        orbHigh: Double,
+        orbLow: Double,
+        dailyCandleSignal: TechnicalIndicators.CandleSignal,
+        thirtyMinCandleSignal: TechnicalIndicators.CandleSignal?,
+        supertrendSignal: String,
+        adx: Double,
+        adxDiPlus: Double,
+        adxDiMinus: Double,
+        aboveVwap: Boolean,
+        rsi: Double,
+        macdLine: Double,
+        macdSignal: Double,
+    ): TechnicalIndicators.PricePrediction {
+        var high       = raw.high
+        var low        = raw.low
+        var direction  = raw.direction
+        var confidence = raw.confidence
+        val reasons    = mutableListOf<String>()
+
+        // ── 1. Pivot-anchored high/low ────────────────────────────────────────────
+        if (pivots != null) {
+            when {
+                ltp >= pivots.r1 -> {
+                    // Already above R1 — target R2, floor at R1
+                    high = maxOf(high, pivots.r2).coerceAtMost(ltp + atr * 2)
+                    low  = maxOf(low,  pivots.r1 * 0.999)
+                    reasons += "pivot:above_R1→R2"
+                }
+                ltp >= pivots.cpp -> {
+                    // Between CPP and R1 — target R1, floor at CPP
+                    high = pivots.r1.coerceAtLeast(high)
+                    low  = maxOf(low, pivots.cpp * 0.999)
+                    reasons += "pivot:above_CPP→R1"
+                }
+                ltp >= pivots.s1 -> {
+                    // Between S1 and CPP — cap at CPP, floor at S1
+                    high = minOf(high, pivots.cpp * 1.001)
+                    low  = minOf(low,  pivots.s1)
+                    reasons += "pivot:between_S1_CPP"
+                }
+                else -> {
+                    // Below S1 — cap at S1, floor at S2
+                    high = minOf(high, pivots.s1 * 1.001)
+                    low  = minOf(low,  pivots.s2)
+                    reasons += "pivot:below_S1→S2"
+                }
+            }
         }
+
+        // ── 2. VIX-adjusted ATR multiplier ────────────────────────────────────────
+        val vixMult = when {
+            cachedVix >= 20.0 -> 1.4
+            cachedVix >= 17.0 -> 1.2
+            else              -> 1.0
+        }
+        if (vixMult > 1.0) {
+            val centre    = (high + low) / 2.0
+            val halfRange = (high - low) / 2.0 * vixMult
+            high = centre + halfRange
+            low  = centre - halfRange
+            reasons += "vix:${String.format("%.1f", cachedVix)}×${vixMult}"
+        }
+
+        // ── 3. Candlestick pattern direction adjustment ────────────────────────────
+        when {
+            dailyCandleSignal == TechnicalIndicators.CandleSignal.BULLISH && direction == "Down" -> {
+                direction   = "Sideways"
+                confidence  = (confidence - 8).coerceAtLeast(30)
+                reasons    += "candle:bull_vs_down→sideways"
+            }
+            dailyCandleSignal == TechnicalIndicators.CandleSignal.BULLISH -> {
+                direction   = "Up"
+                confidence  = (confidence + 8).coerceAtMost(95)
+                reasons    += "candle:bull→up+8"
+            }
+            dailyCandleSignal == TechnicalIndicators.CandleSignal.BEARISH && direction == "Up" -> {
+                direction   = "Sideways"
+                confidence  = (confidence - 8).coerceAtLeast(30)
+                reasons    += "candle:bear_vs_up→sideways"
+            }
+            dailyCandleSignal == TechnicalIndicators.CandleSignal.BEARISH -> {
+                direction   = "Down"
+                confidence  = (confidence + 8).coerceAtMost(95)
+                reasons    += "candle:bear→down+8"
+            }
+        }
+
+        // ── 4. ORB-based range tightening ─────────────────────────────────────────
+        if (orbHigh > 0.0 && orbLow > 0.0) {
+            when {
+                ltp > orbHigh -> {
+                    // Bullish breakout — ORB high becomes support, floor the low there
+                    low        = maxOf(low, orbHigh * 0.998)
+                    if (direction == "Down") { direction = "Sideways"; confidence = (confidence - 5).coerceAtLeast(30) }
+                    reasons   += "orb:above→floor_at_orbHigh"
+                }
+                ltp < orbLow -> {
+                    // Bearish breakdown — ORB low becomes resistance, cap the high there
+                    high       = minOf(high, orbLow * 1.002)
+                    if (direction == "Up") { direction = "Sideways"; confidence = (confidence - 5).coerceAtLeast(30) }
+                    reasons   += "orb:below→cap_at_orbLow"
+                }
+                else -> {
+                    // Inside ORB — direction unclear, reduce confidence slightly
+                    confidence = (confidence - 5).coerceAtLeast(30)
+                    reasons   += "orb:inside→-5"
+                }
+            }
+        }
+
+        // ── 5. Signal alignment confidence boost ──────────────────────────────────
+        val bullCount = listOf(
+            aboveVwap,
+            rsi in 45.0..65.0,
+            macdLine > macdSignal,
+            supertrendSignal == "BUY",
+            thirtyMinCandleSignal == TechnicalIndicators.CandleSignal.BULLISH,
+            adxDiPlus > adxDiMinus && adx >= 25.0,
+        ).count { it }
+
+        val bearCount = listOf(
+            !aboveVwap,
+            rsi > 70.0 || rsi < 30.0,
+            macdLine < macdSignal,
+            supertrendSignal == "SELL",
+            thirtyMinCandleSignal == TechnicalIndicators.CandleSignal.BEARISH,
+            adxDiMinus > adxDiPlus && adx >= 25.0,
+        ).count { it }
+
+        val alignCount = if (direction == "Up") bullCount else if (direction == "Down") bearCount else 0
+        val alignBoost = when (alignCount) { 6 -> 15; 5 -> 10; 4 -> 7; 3 -> 3; else -> 0 }
+        confidence = (confidence + alignBoost).coerceAtMost(100)
+        if (alignBoost > 0) reasons += "align:${alignCount}/6+${alignBoost}"
+
+        // Penalty when signal direction conflicts with dominant signal set
+        if (direction == "Up"   && bearCount > bullCount) { confidence = (confidence - 10).coerceAtLeast(30); reasons += "align:bull_conflict-10" }
+        if (direction == "Down" && bullCount > bearCount) { confidence = (confidence - 10).coerceAtLeast(30); reasons += "align:bear_conflict-10" }
+
+        // ── 6. ADX-adjusted confidence ────────────────────────────────────────────
+        val adxAligned = (direction == "Up" && adxDiPlus > adxDiMinus) || (direction == "Down" && adxDiMinus > adxDiPlus)
+        confidence = when {
+            adx >= 40.0 && adxAligned  -> (confidence + 8).coerceAtMost(100).also { reasons += "adx:strong+8" }
+            adx >= 25.0 && adxAligned  -> (confidence + 5).coerceAtMost(100).also { reasons += "adx:trend+5" }
+            adx < 20.0                 -> (confidence - 8).coerceAtLeast(30).also  { reasons += "adx:choppy-8" }
+            else                       -> confidence
+        }
+
+        // ── Clamp: high >= ltp, low <= ltp, never > ltp ± 3×ATR ─────────────────
+        high = high.coerceIn(ltp, ltp + atr * 3.0)
+        low  = low.coerceIn(ltp - atr * 3.0, ltp)
+
+        AppLogger.d("PREDICT", "$symbol raw=${raw.direction}@${raw.confidence}% → ${direction}@${confidence}% " +
+            "high=₹${String.format("%.2f", high)} low=₹${String.format("%.2f", low)} [${reasons.joinToString(",")}]")
+
+        return TechnicalIndicators.PricePrediction(high, low, direction, confidence)
     }
 }

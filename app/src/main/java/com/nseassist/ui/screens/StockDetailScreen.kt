@@ -770,6 +770,19 @@ private fun StockDetailContent(
                 val adxColor = if (stock.adxDiPlus > stock.adxDiMinus) GreenBull else RedBear
                 IndicatorRow("ADX", String.format("%.1f", stock.adx), adxColor, adxLabel)
             }
+            if (stock.pivotCpp > 0.0) {
+                HorizontalDivider(color = DividerColor, thickness = 0.5.dp)
+                Text("Pivot Points", fontWeight = FontWeight.SemiBold, fontSize = 12.sp, color = TextSecondary)
+                val pivotColor = if (stock.ltp > stock.pivotCpp) GreenBull else RedBear
+                IndicatorRow("Pivot (CPP)", "₹${fmt(stock.pivotCpp)}", pivotColor,
+                    if (stock.ltp > stock.pivotCpp) "Price above pivot" else "Price below pivot")
+                IndicatorRow("R1", "₹${fmt(stock.pivotR1)}", GreenBull.copy(alpha = 0.8f),
+                    if (stock.ltp >= stock.pivotR1) "Already crossed" else "Next resistance")
+                IndicatorRow("R2", "₹${fmt(stock.pivotR2)}", GreenBull.copy(alpha = 0.5f), "Extended target")
+                IndicatorRow("S1", "₹${fmt(stock.pivotS1)}", RedBear.copy(alpha = 0.8f),
+                    if (stock.ltp <= stock.pivotS1) "Already broken" else "First support")
+                IndicatorRow("S2", "₹${fmt(stock.pivotS2)}", RedBear.copy(alpha = 0.5f), "Strong support")
+            }
         }
 
         // Candlestick Pattern

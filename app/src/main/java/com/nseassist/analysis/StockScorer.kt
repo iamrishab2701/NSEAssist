@@ -111,6 +111,16 @@ class StockScorer {
             MarketCondition.CHOPPY -> -3.0   // penalize all setups slightly in choppy market
         }
 
+        // Pivot Point position — price above/below Central Pivot Point
+        if (stock.pivotCpp > 0.0) {
+            when {
+                stock.ltp > stock.pivotR1 -> score += 8.0  // above R1 — strong momentum
+                stock.ltp > stock.pivotCpp -> score += 5.0 // above pivot — bullish bias
+                stock.ltp < stock.pivotS1 -> score -= 8.0  // below S1 — weak
+                else -> score -= 3.0                       // below pivot — bearish bias
+            }
+        }
+
         // Prediction confidence bonus
         if (stock.predictionConfidence >= 75) score += 5.0
 

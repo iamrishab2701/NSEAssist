@@ -221,6 +221,7 @@ private fun MarketOverviewTab(marketState: UiState<MarketOverview>, onRetry: () 
         is UiState.Loading -> LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
         is UiState.Success -> {
             MarketStatusBanner(marketState.data.marketStatus)
+            if (marketState.data.indiaVix >= 20.0) VixDangerBanner(marketState.data.indiaVix)
             MarketOverviewCard(marketState.data)
             MarketSnapshotCard(marketState.data)
             TopMoversCard(marketState.data)
@@ -250,6 +251,37 @@ private fun MarketStatusBanner(status: MarketStatus) {
 }
 
 @Composable
+private fun VixDangerBanner(vix: Double) {
+    Surface(
+        shape = RoundedCornerShape(8.dp),
+        color = RedBear.copy(alpha = 0.15f),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Row(
+            modifier = Modifier.padding(12.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text("⚠", fontSize = 16.sp)
+            Column {
+                Text(
+                    "High Volatility — India VIX ${String.format("%.1f", vix)}",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 13.sp,
+                    color = RedBear,
+                )
+                Text(
+                    "Market is very volatile today. Consider skipping intraday trades or reducing position size.",
+                    fontSize = 11.sp,
+                    color = RedBear.copy(alpha = 0.85f),
+                    lineHeight = 15.sp,
+                )
+            }
+        }
+    }
+}
+
+@Composable
 private fun MarketOverviewCard(data: MarketOverview) {
     Card(colors = CardDefaults.cardColors(containerColor = CardDark), modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -257,6 +289,37 @@ private fun MarketOverviewCard(data: MarketOverview) {
             HorizontalDivider(color = DividerColor)
             IndexRow("NIFTY 50", data.nifty50, data.nifty50ChangePct, data.niftyAboveVwap)
             IndexRow("BANK NIFTY", data.bankNifty, data.bankNiftyChangePct, data.bankNiftyAboveVwap)
+            if (data.indiaVix > 0.0) {
+                HorizontalDivider(color = DividerColor)
+                VixRow(data.indiaVix)
+            }
+        }
+    }
+}
+
+@Composable
+private fun VixRow(vix: Double) {
+    val (label, color) = when {
+        vix < 13.0 -> "Very Calm" to GreenBull
+        vix < 17.0 -> "Normal"    to GreenBull
+        vix < 20.0 -> "Caution"   to AmberWarn
+        else       -> "DANGER"    to RedBear
+    }
+    Row(
+        Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text("India VIX", color = TextSecondary, fontSize = 13.sp)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text(String.format("%.2f", vix), color = color, fontWeight = FontWeight.Bold)
+            Surface(
+                shape = RoundedCornerShape(4.dp),
+                color = color.copy(alpha = 0.15f),
+            ) {
+                Text(label, color = color, fontSize = 11.sp, fontWeight = FontWeight.SemiBold,
+                    modifier = androidx.compose.ui.Modifier.padding(horizontal = 6.dp, vertical = 2.dp))
+            }
         }
     }
 }

@@ -619,9 +619,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
         AppLogger.d("AI", "analyzeStocksWithAi — ${provider.label} stocks=${stocks.size} capital=₹$capital category=${category.routeValue}")
 
+        val vix = (_marketOverview.value as? UiState.Success)?.data?.indiaVix ?: 0.0
         viewModelScope.launch {
             _aiAnalysis.value = UiState.Loading
-            _aiAnalysis.value = aiAnalysisService.analyzeStocks(config, capital, category, stocks)
+            _aiAnalysis.value = aiAnalysisService.analyzeStocks(config, capital, category, stocks, vix)
                 .fold(
                     onSuccess = { UiState.Success(it) },
                     onFailure = {
@@ -680,10 +681,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
         AppLogger.d("AI", "analyzeCurrentStockWithAi — ${provider.label} stock=${stock.symbol} capital=₹$capital")
 
+        val vix = (_marketOverview.value as? UiState.Success)?.data?.indiaVix ?: 0.0
         viewModelScope.launch {
             _singleStockAnalysis.value = UiState.Loading
             _singleStockAnalysis.value = aiAnalysisService
-                .analyzeSingleStock(config, capital, stock, news)
+                .analyzeSingleStock(config, capital, stock, news, vix)
                 .fold(
                     onSuccess = { UiState.Success(it) },
                     onFailure = {
@@ -771,7 +773,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             AppLogger.d("AI", "Enrichment complete — sending ${enrichedStocks.size} stocks to ${provider.label}")
             _exportState.value = ExportState.Idle
 
-            _aiAnalysis.value = aiAnalysisService.analyzeStocks(config, capital, category, enrichedStocks)
+            val vix = (_marketOverview.value as? UiState.Success)?.data?.indiaVix ?: 0.0
+            _aiAnalysis.value = aiAnalysisService.analyzeStocks(config, capital, category, enrichedStocks, vix)
                 .fold(
                     onSuccess = { UiState.Success(it) },
                     onFailure = {

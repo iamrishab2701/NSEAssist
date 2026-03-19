@@ -49,11 +49,16 @@ android {
             firebaseAppDistribution {
                 releaseNotes = """v${appVersionName} — What's new:
 
-• Upstox real-time data — LTP, Change%, Volume, and VWAP now fetched from Upstox instead of Yahoo Finance's 15-min delayed data
-• Fixed Upstox response key mismatch — Upstox returns NSE_EQ:SYMBOL in responses but sends NSE_EQ|ISIN in requests; now resolved correctly
-• Data & AI Settings — switch between Yahoo Finance and Upstox, configure API keys, and activate daily token
-• Token expiry banner — amber warning on home screen when Upstox token needs re-activation
-• In-app session logger — view all network requests, navigation, and scan activity in real time (Settings → Logs)"""
+• Pivot Points (R2/S2) — full pivot level set now shown in Stock Detail and sent to AI for target/stop guidance
+• India VIX in AI analysis — both single-stock and batch AI prompts now include live VIX with danger labels; AI told to prefer NO_TRADE when VIX ≥ 20
+• Prediction accuracy overhaul (6 improvements):
+  - Pivot-anchored predicted high/low — R1/S1/CPP used as natural intraday boundaries instead of raw regression
+  - VIX-adjusted ATR multiplier — predicted range widens on high-fear days (1.4× when VIX ≥ 20)
+  - Candlestick direction adjustment — strong bullish/bearish patterns override regression direction
+  - ORB-based range tightening — predicted low floored at ORB high on confirmed breakouts
+  - Signal alignment boost — confidence increases when VWAP, RSI, MACD, Supertrend, ADX all agree
+  - ADX-adjusted confidence — strong trend boosts confidence; choppy market reduces it
+• PREDICT log tag — each stock now logs raw vs refined prediction with exact reasons (e.g. candle:bull→up+8, align:4/6+7, adx:trend+5)"""
                 groups       = "testers"
             }
         }
