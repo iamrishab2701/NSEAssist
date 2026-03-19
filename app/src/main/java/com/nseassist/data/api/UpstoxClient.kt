@@ -204,8 +204,9 @@ object UpstoxClient {
         ensureInstrumentMap()
 
         // Build instrument_key → trading symbol map for symbols we know
-        val keyToSymbol = symbols
-            .map { it.removeSuffix(".NS").trim() }
+        // Also build a set of clean symbols for response key extraction
+        val cleanSymbols = symbols.map { it.removeSuffix(".NS").trim() }.toSet()
+        val keyToSymbol = cleanSymbols
             .mapNotNull { sym ->
                 val key = instrumentKeyMap[sym] ?: return@mapNotNull null
                 key to sym
@@ -235,15 +236,29 @@ object UpstoxClient {
                 val json = JsonParser.parseString(responseBody).asJsonObject
 
                 val status = json.get("status")?.asString
+                AppLogger.d("UPSTOX", "Quote response status=$status")
                 if (status != "success") {
-                    AppLogger.e("UPSTOX", "Quote API error: ${json.get("message")?.asString}")
+                    AppLogger.e("UPSTOX", "Quote API error: ${json.get("message")?.asString} | body=${responseBody.take(300)}")
                     return@forEach
                 }
 
-                val data = json.getAsJsonObject("data") ?: return@forEach
+                val data = json.getAsJsonObject("data") ?: run {
+                    AppLogger.e("UPSTOX", "Quote response has no 'data' field | body=${responseBody.take(300)}")
+                    return@forEach
+                }
+
+                AppLogger.d("UPSTOX", "data entries=${data.entrySet().size} keys=${data.entrySet().map { it.key }.take(3)}")
 
                 data.entrySet().forEach { (instrKey, quoteEl) ->
-                    val sym = keyToSymbol[instrKey] ?: return@forEach
+                    // Upstox sends NSE_EQ|ISIN in request but returns NSE_EQ:SYMBOL in response
+                    // Extract symbol from response key (after ':' or '|'), then verify it was requested
+                    val sym = keyToSymbol[instrKey]
+                        ?: instrKey.substringAfterLast(":").takeIf { it in cleanSymbols }
+                        ?: instrKey.substringAfterLast("|").takeIf { it in cleanSymbols }
+                        ?: run {
+                            AppLogger.w("UPSTOX", "instrKey '$instrKey' not resolved (cleanSymbols=$cleanSymbols)")
+                            return@forEach
+                        }
                     runCatching {
                         val q        = quoteEl.asJsonObject
                         val ohlc     = q.getAsJsonObject("ohlc")
