@@ -134,10 +134,38 @@ class NSERepository {
                         YahooFinanceClient.getBatchQuotes(listOf("^NSEI", "^NSEBANK"))
                     } ?: emptyList()
                 }
-                // Two parallel screener pages → top 500 NSE stocks by market cap
-                val allQuotes = withTimeoutOrNull(45_000L) {
-                    YahooFinanceClient.screenNseStocks(minVolume = 1_000_000, maxPrice = capital)
-                } ?: emptyList()
+                // Yahoo's screener returns the TOP-N stocks by volume within a price range.
+                // When maxPrice is high (e.g. ₹95,000), expensive large caps fill all N slots,
+                // pushing out cheaper quality stocks — causing fewer results with bigger capital.
+                //
+                // Fix: ALWAYS fetch a "cheap pool" with a fixed low ceiling so quality affordable
+                // stocks are always present. For capitals above the ceiling, ALSO fetch a broader
+                // pool in parallel and merge — so higher capital gives MORE results, never fewer.
+                val cheapCeiling = when (category) {
+                    ScanCategory.PENNY     -> minOf(capital, PENNY_STOCK_MAX)  // ≤ ₹50
+                    ScanCategory.SMALL_CAP -> minOf(capital, 1_000.0)
+                    ScanCategory.MID_CAP   -> minOf(capital, 5_000.0)
+                    else                   -> minOf(capital, 1_000.0)          // ALL / LARGE_CAP: ₹1,000 fixed floor
+                }
+                val cheapPoolDeferred = async {
+                    withTimeoutOrNull(45_000L) {
+                        YahooFinanceClient.screenNseStocks(minVolume = 1_000_000, maxPrice = cheapCeiling)
+                    } ?: emptyList()
+                }
+                // For capitals above the cheap ceiling, also fetch a broader pool in parallel.
+                // Condition is inside the async block to avoid nullable Deferred type inference issues.
+                val broaderPoolDeferred = async {
+                    if (capital > cheapCeiling) {
+                        withTimeoutOrNull(45_000L) {
+                            YahooFinanceClient.screenNseStocks(minVolume = 1_000_000, maxPrice = minOf(capital, 10_000.0))
+                        } ?: emptyList()
+                    } else emptyList()
+                }
+
+                val cheapPool   = cheapPoolDeferred.await()
+                val broaderPool = broaderPoolDeferred.await()
+                val allQuotes   = (cheapPool + broaderPool).distinctBy { it.symbol }
+                AppLogger.d("SCAN", "Screener pools merged — cheap=${cheapPool.size} broader=${broaderPool.size} total=${allQuotes.size}")
 
                 val indices = indicesDeferred.await()
                 val nifty = indices.firstOrNull { it.symbol == "^NSEI" }
@@ -150,7 +178,7 @@ class NSERepository {
                 AppLogger.d("SCAN", "Screener returned ${allQuotes.size} liquid NSE stocks")
 
                 val snapshots = allQuotes.mapNotNull { q ->
-                    if (q.price !in 1.0..capital) return@mapNotNull null
+                    if (q.price < 1.0 || q.price > capital) return@mapNotNull null  // must afford ≥1 share
                     val name    = q.symbol.removeSuffix(".NS")
                     val vwap    = (q.dayHigh + q.dayLow + q.price) / 3
                     val gapType = when {
@@ -274,7 +302,7 @@ class NSERepository {
 
     // fetchNews = false during Phase 2 batch scans (saves ~18s per stock when Google News is slow)
     // fetchNews = true only on the Stock Detail screen where the user actually reads the news
-    suspend fun analyseStock(ticker: String, fetchNews: Boolean = false): Result<StockData> = withContext(Dispatchers.IO) {
+    suspend fun analyseStock(ticker: String, fetchNews: Boolean = false, isShortMode: Boolean = false): Result<StockData> = withContext(Dispatchers.IO) {
         runCatching {
             val cleanSymbol  = ticker.removeSuffix(".NS")
             val yahooSymbol  = "$cleanSymbol.NS"
@@ -504,7 +532,7 @@ class NSERepository {
             val score  = (scorer.score(stockData, marketCondition) + newsImpact).coerceIn(0.0, 100.0)
             val option = scorer.optionAction(stockData)
             val enriched = stockData.copy(score = score, optionAction = option, news = news, newsImpactScore = newsImpact, isDeepEnriched = true)
-            val quickTake = generateQuickTake(enriched, thirtyMinCandle, pivots, supertrend30m?.signal ?: "NEUTRAL")
+            val quickTake = generateQuickTake(enriched, thirtyMinCandle, pivots, supertrend30m?.signal ?: "NEUTRAL", isShortMode = isShortMode)
             if (quickTake != null) AppLogger.d("QT", "$cleanSymbol → ${quickTake.action} (${quickTake.confidence}%)")
             val result = enriched.copy(quickTake = quickTake)
 
@@ -565,7 +593,7 @@ class NSERepository {
     //   ✅ Profile is cached     — only fetched once per session per stock
     //   ✅ NIFTY is cached       — fetched once, shared across all 15 Phase-2 stocks
     //
-    suspend fun analyseStockFromPhase1(phase1: StockData, fetchNews: Boolean = false, orbBreakoutMode: Boolean = false): Result<StockData> =
+    suspend fun analyseStockFromPhase1(phase1: StockData, fetchNews: Boolean = false, orbBreakoutMode: Boolean = false, isShortMode: Boolean = false): Result<StockData> =
         withContext(Dispatchers.IO) {
             runCatching {
                 val cleanSymbol = phase1.symbol.removeSuffix(".NS")
@@ -749,7 +777,7 @@ class NSERepository {
                 val score  = (scorer.score(stockData, marketCondition) + newsImpact).coerceIn(0.0, 100.0)
                 val option = scorer.optionAction(stockData)
                 val enriched = stockData.copy(score = score, optionAction = option, newsImpactScore = newsImpact)
-                val quickTake = generateQuickTake(enriched, thirtyMinCandle, pivots, supertrend30m?.signal ?: "NEUTRAL", orbBreakoutMode)
+                val quickTake = generateQuickTake(enriched, thirtyMinCandle, pivots, supertrend30m?.signal ?: "NEUTRAL", orbBreakoutMode, isShortMode)
                 if (quickTake != null) AppLogger.d("QT", "${phase1.symbol} → ${quickTake.action} (${quickTake.confidence}%)")
                 enriched.copy(quickTake = quickTake)
             }
@@ -791,7 +819,10 @@ class NSERepository {
             ScanCategory.PENNY -> stock.ltp <= PENNY_STOCK_MAX
             ScanCategory.LARGE_CAP -> stock.marketCap >= LARGE_CAP_MIN
             ScanCategory.MID_CAP -> stock.marketCap >= MID_CAP_MIN && stock.marketCap < LARGE_CAP_MIN
-            ScanCategory.SMALL_CAP -> stock.marketCap >= SMALL_CAP_MIN && stock.marketCap < MID_CAP_MIN
+            ScanCategory.SMALL_CAP ->
+                if (stock.marketCap >= MID_CAP_MIN) false
+                else if (stock.marketCap >= SMALL_CAP_MIN) true
+                else stock.ltp in 10.0..300.0   // price-based fallback when market cap data is missing/zero
         }
     }
 
@@ -854,6 +885,7 @@ class NSERepository {
         pivots: TechnicalIndicators.PivotPoints?,
         supertrendSignal: String,
         orbBreakoutMode: Boolean = false,
+        isShortMode: Boolean = false,
     ): QuickTake {
         fun fmt(v: Double) = "₹${String.format("%,.2f", v)}"
         fun pct(v: Double) = String.format("%.1f", v)
@@ -898,45 +930,64 @@ class NSERepository {
 
         // Use pivot R1 as target if it's above LTP and reachable today (within 8%)
         // Use pivot R2 if LTP has already crossed R1
+        // Short mode: use S1 as target (below LTP), R1 as stop (above LTP)
         // Fallback to ATR-based target when pivots are unavailable or too far away
         val targetPrice = when {
+            isShortMode && isBearish && pivots != null && pivots.s1 < ltp && pivots.s1 >= ltp * 0.92 -> pivots.s1
+            isShortMode && isBearish -> ltp - atr * 1.2
             isBullish && pivots != null && pivots.r1 > ltp && pivots.r1 <= ltp * 1.08 -> pivots.r1
             isBullish && pivots != null && ltp >= pivots.r1 && pivots.r2 > ltp        -> pivots.r2
             isBullish -> atrTarget
             else      -> ltp - atr * 1.2
         }
 
-        // Use S1 as stop only when it sits between the ATR stop and LTP (valid support zone)
+        // Short mode: stop is above LTP (use R1 if close, else ATR)
+        // Long mode: use S1 as stop only when it sits between the ATR stop and LTP (valid support zone)
         val stopPrice = when {
+            isShortMode && isBearish && pivots != null && pivots.r1 > ltp && pivots.r1 <= ltp * 1.05 -> pivots.r1
+            isShortMode && isBearish -> ltp + atr * 0.6
             isBullish && pivots != null && pivots.s1 in atrStop..ltp -> pivots.s1
             isBullish -> atrStop
             else      -> ltp + atr * 0.6
         }
 
-        val targetPct   = (targetPrice - entryPrice) / entryPrice * 100
+        val targetPct   = kotlin.math.abs(targetPrice - entryPrice) / entryPrice * 100
         val stopPct     = kotlin.math.abs(entryPrice - stopPrice) / entryPrice * 100
 
         val targetSource = when {
+            isShortMode && isBearish && pivots != null && pivots.s1 < ltp && pivots.s1 >= ltp * 0.92 -> "S1"
+            isShortMode && isBearish -> "ATR"
             isBullish && pivots != null && pivots.r1 > ltp && pivots.r1 <= ltp * 1.08 -> "R1"
             isBullish && pivots != null && ltp >= pivots.r1 && pivots.r2 > ltp        -> "R2"
             isBullish -> "ATR"
             else      -> "N/A"
         }
         val slSource = when {
+            isShortMode && isBearish && pivots != null && pivots.r1 > ltp && pivots.r1 <= ltp * 1.05 -> "R1"
+            isShortMode && isBearish -> "ATR"
             isBullish && pivots != null && pivots.s1 in atrStop..ltp -> "S1"
             isBullish -> "ATR"
             else      -> "N/A"
         }
-        AppLogger.d("QT", "${stock.symbol} → target=${targetSource}(${fmt(targetPrice)}) sl=${slSource}(${fmt(stopPrice)}) action=${if (isBullish) "BUY" else if (isBearish) "AVOID" else "WAIT"}")
+        AppLogger.d("QT", "${stock.symbol} → target=${targetSource}(${fmt(targetPrice)}) sl=${slSource}(${fmt(stopPrice)}) action=${if (isShortMode && isBearish) "SHORT" else if (isBullish) "BUY" else if (isBearish) "AVOID" else "WAIT"}")
 
         val action = when {
+            isShortMode && isBearish -> "Short ↓ below ${fmt(entryPrice)}"
             hasResistanceBreakout && isBullish -> "Buy — Resistance breakout above ${fmt(stock.resistance)}"
             isBullish -> "Buy above ${fmt(entryPrice)}"
             isBearish -> "Avoid buying — wait for the selling to stop first"
             else      -> "Wait — no clear signal yet. Watch if price crosses ${fmt(ltp + atr * 0.15)}"
         }
-        val target   = if (isBullish) "Target: ${fmt(targetPrice)} (+${pct(targetPct)}%)"   else "—"
-        val stopLoss = if (isBullish) "Stop Loss: ${fmt(stopPrice)} (-${pct(stopPct)}%)" else "—"
+        val target = when {
+            isShortMode && isBearish -> "Target: ${fmt(targetPrice)} (-${pct(targetPct)}%)"
+            isBullish -> "Target: ${fmt(targetPrice)} (+${pct(targetPct)}%)"
+            else -> "—"
+        }
+        val stopLoss = when {
+            isShortMode && isBearish -> "Stop Loss: ${fmt(stopPrice)} (+${pct(stopPct)}%)"
+            isBullish -> "Stop Loss: ${fmt(stopPrice)} (-${pct(stopPct)}%)"
+            else -> "—"
+        }
 
         // ── WHY ───────────────────────────────────────────────────────────────
         val rsiDesc = when {
@@ -968,6 +1019,8 @@ class NSERepository {
 
         // ── WARNING ───────────────────────────────────────────────────────────
         val warning = when {
+            isShortMode && isBearish && stock.rsi < 32 -> "RSI below 32 — stock may be oversold and could bounce. Wait for a bearish confirmation candle before shorting."
+            isShortMode && isBearish -> "Exit immediately if price rises above ${fmt(stopPrice)} — the short setup has failed."
             stock.rsi > 68  -> "The stock has already risen a lot today. Don't buy if it keeps jumping — wait for a small dip first."
             stock.rsi < 32  -> "The stock has been falling. Wait for it to start going back up before buying — don't buy while it's still dropping."
             !stock.aboveVwap && isBullish -> "The price is still below today's average. Only buy if it crosses above ${fmt(stock.vwap)} first."

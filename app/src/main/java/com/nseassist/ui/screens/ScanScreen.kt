@@ -32,6 +32,7 @@ import com.nseassist.ui.theme.*
 import com.nseassist.ui.viewmodel.ExportState
 import com.nseassist.ui.viewmodel.MainViewModel
 import com.nseassist.ui.viewmodel.UiState
+import com.nseassist.util.AppLogger
 import com.nseassist.util.ScanExportUtil
 
 private enum class ScanSortOption(val label: String) {
@@ -67,11 +68,12 @@ fun ScanScreen(
     val isDeepScan = scanMode == "breakouts" || scanMode == "trade" || scanMode == "oversold"
     val isShortMode = scanMode == "short"
     LaunchedEffect(capital, category, scanMode) {
+        AppLogger.d("SHORT", "ScanScreen launched — mode=$scanMode capital=₹$capital category=${category.routeValue}")
         when (scanMode) {
             "trade"     -> vm.scanReadyToTrade(capital, category, orbBreakoutMode = true)
             "breakouts" -> vm.scanReadyToTrade(capital, category, orbBreakoutMode = false)
             "oversold"  -> vm.scanOversoldBounce(capital)
-            "short"     -> vm.scanShort(capital, category)
+            "short"     -> { AppLogger.d("SHORT", "→ Triggering scanShort"); vm.scanShort(capital, category) }
             else        -> vm.scanStocks(capital, category)
         }
     }
@@ -228,7 +230,8 @@ fun ScanScreen(
                     }
                     .let { list ->
                         when (sortOption) {
-                            ScanSortOption.SCORE -> list.sortedByDescending { it.score }
+                            // Short mode: ascending (lowest score = most bearish = first)
+                            ScanSortOption.SCORE -> if (isShortMode) list.sortedBy { it.score } else list.sortedByDescending { it.score }
                             ScanSortOption.CHANGE_PCT -> list.sortedByDescending { it.changePct }
                             ScanSortOption.PRICE_LOW -> list.sortedBy { it.ltp }
                             ScanSortOption.PRICE_HIGH -> list.sortedByDescending { it.ltp }
@@ -275,10 +278,11 @@ fun ScanScreen(
                         AnalyzeWithAiCard(
                             providers = aiSettings.configuredProviders(),
                             exportState = exportState,
+                            isShortMode = isShortMode,
                             onAnalyze = { showProviderPicker = true },
                             onExport = {
                                 vm.prepareDeepExport(capital, category, stocks) { enrichedStocks ->
-                                    ScanExportUtil.shareScanResults(context, capital, category, enrichedStocks)
+                                    ScanExportUtil.shareScanResults(context, capital, category, enrichedStocks, isShortMode)
                                 }
                             },
                         )
@@ -320,7 +324,7 @@ fun ScanScreen(
                         }
                     }
                     items(pageStocks) { stock ->
-                        ScanStockRow(stock, scorer) {
+                        ScanStockRow(stock, scorer, isShortMode) {
                             navController.navigate("stock/${stock.symbol}")
                         }
                     }
@@ -394,19 +398,36 @@ private fun DeepEnrichBanner(done: Int, total: Int) {
 private fun AnalyzeWithAiCard(
     providers: List<AiProviderConfig>,
     exportState: ExportState,
+    isShortMode: Boolean = false,
     onAnalyze: () -> Unit,
     onExport: () -> Unit,
 ) {
     val isPreparing = exportState is ExportState.Preparing
+    val accentColor = if (isShortMode) RedBear else BluePrimary
     Card(colors = CardDefaults.cardColors(containerColor = CardDark), modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Text("AI Analysis", fontWeight = FontWeight.Bold, fontSize = 16.sp, color = TextPrimary)
-            Text("You can either analyze in-app or export the current result set for manual upload.", color = TextSecondary, fontSize = 12.sp)
+            Text(
+                if (isShortMode) "📉 Short Analysis" else "AI Analysis",
+                fontWeight = FontWeight.Bold,
+                fontSize = 16.sp,
+                color = if (isShortMode) RedBear else TextPrimary,
+            )
+            Text(
+                if (isShortMode)
+                    "Let AI scan these bearish stocks for the best SHORT (SELL MIS) setups and rank them by risk/reward."
+                else
+                    "You can either analyze in-app or export the current result set for manual upload.",
+                color = TextSecondary,
+                fontSize = 12.sp,
+            )
             if (providers.isEmpty()) {
                 Text("Add at least one provider API key in Settings to enable AI analysis.", color = TextSecondary, fontSize = 12.sp)
             } else {
                 Text(
-                    "Analyze the current result set with ${providers.joinToString { it.provider.label }}.",
+                    if (isShortMode)
+                        "AI will evaluate SELL signals, stop loss above entry, and targets below — using ${providers.joinToString { it.provider.label }}."
+                    else
+                        "Analyze the current result set with ${providers.joinToString { it.provider.label }}.",
                     color = TextSecondary,
                     fontSize = 12.sp,
                 )
@@ -414,9 +435,9 @@ private fun AnalyzeWithAiCard(
                     onClick = onAnalyze,
                     enabled = !isPreparing,
                     modifier = Modifier.fillMaxWidth(),
-                    colors = ButtonDefaults.buttonColors(containerColor = BluePrimary, contentColor = Color.White),
+                    colors = ButtonDefaults.buttonColors(containerColor = accentColor, contentColor = Color.White),
                 ) {
-                    Text("Analyze with AI")
+                    Text(if (isShortMode) "Analyze for SHORT Opportunities" else "Analyze with AI")
                 }
             }
             if (isPreparing) {
@@ -430,7 +451,7 @@ private fun AnalyzeWithAiCard(
                     LinearProgressIndicator(
                         progress = { if (state.total > 0) state.done.toFloat() / state.total else 0f },
                         modifier = Modifier.fillMaxWidth(),
-                        color = BluePrimary,
+                        color = accentColor,
                     )
                 }
             } else {
@@ -657,13 +678,39 @@ private fun ReadyToTradeRow(stock: StockData, onClick: () -> Unit) {
 }
 
 @Composable
-private fun ScanStockRow(stock: StockData, scorer: StockScorer, onClick: () -> Unit) {
+private fun ScanStockRow(
+    stock: StockData,
+    scorer: StockScorer,
+    isShortMode: Boolean = false,
+    onClick: () -> Unit,
+) {
     val isUp = stock.changePct >= 0
     val priceColor = if (isUp) GreenBull else RedBear
-    val scoreColor = when {
-        stock.score >= 70 -> GreenBull
-        stock.score >= 50 -> AmberWarn
-        else -> RedBear
+
+    // In short mode: low score = most bearish = BEST short candidate (highlighted red)
+    //                high score = bullish = BAD for shorting (grayed out)
+    val scoreColor = if (isShortMode) {
+        when {
+            stock.score < 40  -> RedBear       // most bearish — ideal short
+            stock.score < 55  -> AmberWarn     // mildly bearish — possible short
+            else              -> TextSecondary  // too bullish — skip for shorting
+        }
+    } else {
+        when {
+            stock.score >= 70 -> GreenBull
+            stock.score >= 50 -> AmberWarn
+            else              -> RedBear
+        }
+    }
+
+    val scoreBadgeLabel = if (isShortMode) {
+        when {
+            stock.score < 40  -> "SHORT ✓"
+            stock.score < 55  -> "WEAK"
+            else              -> "NOT SHORT"
+        }
+    } else {
+        scorer.signalLabel(stock.score)
     }
 
     Card(
@@ -710,14 +757,15 @@ private fun ScanStockRow(stock: StockData, scorer: StockScorer, onClick: () -> U
                     Text(String.format("%+.2f%%", stock.changePct), color = priceColor, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                 }
 
-                // Score badge
+                // Score badge — inverted in short mode (low score = good candidate)
                 Surface(shape = RoundedCornerShape(8.dp), color = scoreColor.copy(alpha = 0.13f)) {
                     Column(
                         modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
                         horizontalAlignment = Alignment.CenterHorizontally,
                     ) {
-                        Text(String.format("%.0f", stock.score), color = scoreColor, fontWeight = FontWeight.Bold, fontSize = 15.sp)
-                        Text(scorer.signalLabel(stock.score), color = scoreColor, fontSize = 9.sp)
+                        val displayScore = if (isShortMode) 100.0 - stock.score else stock.score
+                        Text(String.format("%.0f", displayScore), color = scoreColor, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                        Text(scoreBadgeLabel, color = scoreColor, fontSize = 9.sp)
                     }
                 }
             }

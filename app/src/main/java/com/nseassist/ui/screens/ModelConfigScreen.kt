@@ -109,19 +109,6 @@ fun ModelConfigScreen(navController: NavController, vm: MainViewModel) {
                         )
                     }
 
-                    HorizontalDivider(color = TextSecondary.copy(alpha = 0.15f))
-
-                    OutlinedButton(
-                        onClick  = { navController.navigate("logs") },
-                        modifier = Modifier.fillMaxWidth(),
-                        colors   = ButtonDefaults.outlinedButtonColors(contentColor = BluePrimary),
-                    ) {
-                        Text("View Session Logs")
-                    }
-                    Text(
-                        "Network calls, navigation, and app events for the current session. Share with developer for debugging.",
-                        color = TextSecondary, fontSize = 11.sp,
-                    )
                 }
             }
         }

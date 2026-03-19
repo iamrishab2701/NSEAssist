@@ -22,6 +22,7 @@ import com.nseassist.ui.screens.LogViewerScreen
 import com.nseassist.ui.screens.ModelConfigScreen
 import com.nseassist.ui.screens.PerformanceScreen
 import com.nseassist.ui.screens.ScanScreen
+import com.nseassist.ui.screens.SettingsScreen
 import com.nseassist.ui.screens.StockDetailScreen
 import com.nseassist.ui.theme.NSEAssistTheme
 import com.nseassist.ui.viewmodel.MainViewModel
@@ -91,6 +92,9 @@ fun AppNavHost(navController: NavHostController, vm: MainViewModel) {
         }
         composable("logs") {
             LogViewerScreen(navController)
+        }
+        composable("settings") {
+            SettingsScreen(navController, vm)
         }
     }
 }

@@ -42,6 +42,7 @@ fun StockDetailScreen(navController: NavController, symbol: String, vm: MainView
     val signalReplayState   by vm.signalReplay.collectAsState()
     val aiSettings          by vm.aiSettings.collectAsState()
     val capital             by vm.capital.collectAsState()
+    val isShortMode         by vm.isShortMode.collectAsState()
 
     var showAiSheet     by remember { mutableStateOf(false) }
     var showReplaySheet by remember { mutableStateOf(false) }
@@ -113,9 +114,10 @@ fun StockDetailScreen(navController: NavController, symbol: String, vm: MainView
         floatingActionButton = {
             if (detailState is UiState.Success) {
                 val isAnalyzing = singleStockAnalysis is UiState.Loading
+                val fabBaseColor = if (isShortMode) RedBear else BluePrimary
                 FloatingActionButton(
                     onClick = { if (!isAnalyzing) showAiSheet = true },
-                    containerColor = if (isAnalyzing) BluePrimary.copy(alpha = 0.65f) else BluePrimary,
+                    containerColor = if (isAnalyzing) fabBaseColor.copy(alpha = 0.65f) else fabBaseColor,
                     contentColor = Color.White,
                     shape = RoundedCornerShape(16.dp),
                 ) {
@@ -126,7 +128,11 @@ fun StockDetailScreen(navController: NavController, symbol: String, vm: MainView
                             strokeWidth = 2.dp,
                         )
                     } else {
-                        Text("AI", fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                        Text(
+                            if (isShortMode) "📉" else "AI",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 15.sp,
+                        )
                     }
                 }
             }
@@ -146,6 +152,7 @@ fun StockDetailScreen(navController: NavController, symbol: String, vm: MainView
             is UiState.Success -> StockDetailContent(
                 stock           = state.data,
                 newsState       = newsState,
+                isShortMode     = isShortMode,
                 modifier        = Modifier.padding(padding),
                 onReplaySignals = {
                     showReplaySheet = true
@@ -660,6 +667,7 @@ private fun SignalReplaySheet(
 private fun StockDetailContent(
     stock: StockData,
     newsState: UiState<NewsResult?>,
+    isShortMode: Boolean = false,
     modifier: Modifier,
     onReplaySignals: () -> Unit,
 ) {
@@ -673,6 +681,30 @@ private fun StockDetailContent(
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
+        // Short mode context banner — shown above Quick Take so user knows bearish = GOOD here
+        if (isShortMode) {
+            Surface(
+                color = RedBear.copy(alpha = 0.10f),
+                shape = RoundedCornerShape(8.dp),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(
+                        "📉 SHORT CANDIDATE",
+                        color = RedBear,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold,
+                    )
+                    Text(
+                        "You're in Short Scan mode. Bearish signals here are what you WANT — use SELL (MIS) in Kite to profit when this stock falls. The Quick Take below reflects the bearish situation.",
+                        color = RedBear.copy(alpha = 0.85f),
+                        fontSize = 12.sp,
+                        lineHeight = 18.sp,
+                    )
+                }
+            }
+        }
+
         // Quick Take — plain English summary (shown only when 30-min data is available)
         stock.quickTake?.let { QuickTakeCard(it) }
 

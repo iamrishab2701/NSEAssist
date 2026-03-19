@@ -49,16 +49,12 @@ android {
             firebaseAppDistribution {
                 releaseNotes = """v${appVersionName} — What's new:
 
-• Pivot Points (R2/S2) — full pivot level set now shown in Stock Detail and sent to AI for target/stop guidance
-• India VIX in AI analysis — both single-stock and batch AI prompts now include live VIX with danger labels; AI told to prefer NO_TRADE when VIX ≥ 20
-• Prediction accuracy overhaul (6 improvements):
-  - Pivot-anchored predicted high/low — R1/S1/CPP used as natural intraday boundaries instead of raw regression
-  - VIX-adjusted ATR multiplier — predicted range widens on high-fear days (1.4× when VIX ≥ 20)
-  - Candlestick direction adjustment — strong bullish/bearish patterns override regression direction
-  - ORB-based range tightening — predicted low floored at ORB high on confirmed breakouts
-  - Signal alignment boost — confidence increases when VWAP, RSI, MACD, Supertrend, ADX all agree
-  - ADX-adjusted confidence — strong trend boosts confidence; choppy market reduces it
-• PREDICT log tag — each stock now logs raw vs refined prediction with exact reasons (e.g. candle:bull→up+8, align:4/6+7, adx:trend+5)"""
+• Short Mode — dedicated Short tab now fully isolated; AI analysis, QuickTake language, and scan results all switch to short/bearish perspective when Short tab is active
+• Two-pool screener fix — scan now always fetches a cheap-pool + broader-pool in parallel and merges results; higher capital no longer returns fewer affordable stocks due to Yahoo TOP-N bias
+• Short scan sort — stocks sorted ascending (most bearish first) in Short mode instead of descending
+• Short QuickTake — AI-generated one-liners correctly say "Short ↓ below ₹X" in Short mode, "Long ↑ above ₹X" elsewhere
+• isShortMode propagation — short-mode flag now flows end-to-end: scan → analyseStock → generateQuickTake → AI analysis prompt
+• Upstox regression clean — all scan modes (Normal, ORB, Ready to Trade, Morning Selloff, Short) verified working with Upstox overlay (single-batch, ~50 ms for 184 stocks)"""
                 groups       = "testers"
             }
         }

@@ -73,6 +73,9 @@ fun HomeScreen(navController: NavController, vm: MainViewModel) {
     val currentCategory = ScanCategory.fromRouteValue(selectedCategory)
     var showHamburger by remember { mutableStateOf(false) }
 
+    // Short mode is active only while the Short tab is visible — all other tabs use normal mode
+    LaunchedEffect(currentTab) { vm.setShortMode(currentTab == HomeTab.Short) }
+
     AppGradientBackground {
     Scaffold(
         topBar = {
@@ -200,7 +203,7 @@ fun HomeScreen(navController: NavController, vm: MainViewModel) {
     if (showHamburger) {
         ModalBottomSheet(
             onDismissRequest = { showHamburger = false },
-            containerColor = CardDark,
+            containerColor = SheetSurface,
         ) {
             Column(modifier = Modifier.padding(bottom = 32.dp)) {
                 Text(
@@ -211,69 +214,26 @@ fun HomeScreen(navController: NavController, vm: MainViewModel) {
                     modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp),
                 )
                 HorizontalDivider(color = SurfaceDark)
-                // Theme toggle
+                // Settings
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 20.dp, vertical = 12.dp),
+                        .clickable {
+                            showHamburger = false
+                            navController.navigate("settings")
+                        }
+                        .padding(horizontal = 20.dp, vertical = 16.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceBetween,
                 ) {
-                    Text("Dark Theme", fontSize = 15.sp, color = TextPrimary)
-                    Switch(
-                        checked = themeMode == ThemeMode.DARK,
-                        onCheckedChange = { vm.setThemeMode(if (it) ThemeMode.DARK else ThemeMode.LIGHT) },
-                        colors = SwitchDefaults.colors(
-                            checkedThumbColor = BluePrimary,
-                            checkedTrackColor = BluePrimary.copy(alpha = 0.3f),
-                        ),
-                    )
-                }
-                HorizontalDivider(color = SurfaceDark)
-                // Data & AI Settings
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable {
-                            showHamburger = false
-                            navController.navigate("settings/model-config")
-                        }
-                        .padding(horizontal = 20.dp, vertical = 16.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(16.dp),
-                ) {
-                    Icon(Icons.Default.Settings, contentDescription = null, tint = TextSecondary)
-                    Text("Data & AI Settings", fontSize = 15.sp, color = TextPrimary)
-                }
-                // Session Logs
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable {
-                            showHamburger = false
-                            navController.navigate("logs")
-                        }
-                        .padding(horizontal = 20.dp, vertical = 16.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(16.dp),
-                ) {
-                    Icon(Icons.Filled.TrendingUp, contentDescription = null, tint = TextSecondary)
-                    Text("Session Logs", fontSize = 15.sp, color = TextPrimary)
-                }
-                // About
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable {
-                            showHamburger = false
-                            navController.navigate("settings/about")
-                        }
-                        .padding(horizontal = 20.dp, vertical = 16.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(16.dp),
-                ) {
-                    Icon(Icons.Default.Info, contentDescription = null, tint = TextSecondary)
-                    Text("About NSEAssist", fontSize = 15.sp, color = TextPrimary)
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(16.dp),
+                    ) {
+                        Icon(Icons.Default.Settings, contentDescription = null, tint = TextSecondary)
+                        Text("Settings", fontSize = 15.sp, color = TextPrimary)
+                    }
+                    Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = null, tint = TextSecondary)
                 }
             }
         }

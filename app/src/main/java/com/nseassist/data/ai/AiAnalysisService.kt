@@ -105,14 +105,15 @@ class AiAnalysisService {
         stock: StockData,
         news: NewsResult?,
         vix: Double = 0.0,
+        isShortMode: Boolean = false,
     ): Result<SingleStockAiAnalysis> = withContext(Dispatchers.IO) { runCatching {
         require(config.apiKey.isNotBlank()) { "API key missing for ${config.provider.label}" }
-        AppLogger.d("AI", "Single-stock — ${config.provider.label} ${stock.symbol} LTP=₹${stock.ltp} vix=${"%.2f".format(vix)}")
+        AppLogger.d("AI", "Single-stock — ${config.provider.label} ${stock.symbol} LTP=₹${stock.ltp} vix=${"%.2f".format(vix)} shortMode=$isShortMode")
 
         // Fetch historical context for this stock (4 s timeout, non-blocking on failure)
         val context = MemoryClient.getAiContext(stock.symbol)
 
-        val prompt = buildSingleStockPrompt(capital, stock, news, context, vix)
+        val prompt = buildSingleStockPrompt(capital, stock, news, context, vix, isShortMode)
         val rawResponse = callProvider(config, SINGLE_STOCK_SYSTEM_PROMPT, prompt)
         val result = parseSingleStockReport(rawResponse, config)
         AppLogger.d("AI", "Single-stock done — ${stock.symbol} verdict=${result.verdict} direction=${result.direction} confidence=${result.confidence}%")
@@ -371,6 +372,7 @@ class AiAnalysisService {
         news: NewsResult?,
         context: StockAiContext? = null,
         vix: Double = 0.0,
+        isShortMode: Boolean = false,
     ): String {
         val qty     = if (stock.ltp > 0) kotlin.math.floor(capital / stock.ltp).toInt() else 0
         val maxLoss = capital * 0.02
@@ -397,6 +399,20 @@ class AiAnalysisService {
         }
 
         return buildString {
+            // ── Short mode banner — injected first so AI reads it before any other data ──
+            if (isShortMode) {
+                appendLine("=== ⚠ SHORT SCAN MODE — READ THIS FIRST ===")
+                appendLine("The user is looking for stocks to SHORT (SELL MIS on Kite — bet that price will fall).")
+                appendLine("A BEARISH stock is DESIRED here — falling price, negative momentum, low score = GOOD for shorting.")
+                appendLine("Your job: find a clear SELL setup. If the stock shows strong bearish signals, verdict=GO + direction=SELL.")
+                appendLine("If the stock is too bullish or the signals are mixed/unclear, verdict=NO-GO + direction=SKIP.")
+                appendLine("Rules for SHORT GO: bearish technical signals, price falling/below VWAP, negative change%, Supertrend SELL or EMA bearish structure.")
+                appendLine("Stop loss for short = price ABOVE entry (if price rises above stop, the short is failing — exit).")
+                appendLine("Target for short = price BELOW entry (you profit when price falls to target).")
+                appendLine("===========================================")
+                appendLine()
+            }
+
             appendLine("=== SINGLE STOCK INTRADAY ANALYSIS ===")
             appendLine()
             appendLine("--- TIME & MARKET STATUS ---")

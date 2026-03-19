@@ -112,6 +112,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val _deepEnrichProgress = MutableStateFlow<Pair<Int, Int>?>(null)
     val deepEnrichProgress: StateFlow<Pair<Int, Int>?> = _deepEnrichProgress
 
+    // ── Short mode flag — true when last scan was a Short scan ───────────────────
+    // Used to pass context to the single-stock AI so it evaluates SELL setups.
+    private val _isShortMode = MutableStateFlow(false)
+    val isShortMode: StateFlow<Boolean> = _isShortMode
+
+    /** Called by HomeScreen whenever the active tab changes — limits short mode to the Short tab only. */
+    fun setShortMode(active: Boolean) { _isShortMode.value = active }
+
     // ── Deep Export State ────────────────────────────────────────────────────────
     private val _exportState = MutableStateFlow<ExportState>(ExportState.Idle)
     val exportState: StateFlow<ExportState> = _exportState
@@ -450,6 +458,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun scanStocks(capital: Double, category: ScanCategory) {
         _capital.value = capital   // store so single-stock AI analysis can pre-fill it
+        _isShortMode.value = false // regular buy scan — clear short mode flag
         val now = System.currentTimeMillis()
         val cached = capital == scanCacheCapital &&
                      category == scanCacheCategory &&
@@ -493,6 +502,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      */
     fun scanShort(capital: Double, category: ScanCategory) {
         _capital.value = capital
+        _isShortMode.value = true   // flag so AI analyses use SELL-oriented prompt
         // Invalidate normal scan cache so switching back to Buy tab re-fetches correctly
         scanCacheTimestamp = 0L
         viewModelScope.launch {
@@ -502,16 +512,52 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             repo.scanAffordableStocks(capital, category).fold(
                 onSuccess = { phase1List ->
                     // Keep stocks that are bearish: negative change OR below VWAP OR low score
-                    val bearish = phase1List
+                    val byChangePct = phase1List.filter { it.changePct < 0.5 }
+                    val byScore     = phase1List.filter { it.score < 55 }
+                    val bearish     = phase1List
                         .filter { it.changePct < 0.5 || it.score < 55 }
                         .sortedBy { it.score }  // lowest (most bearish) first
-                    AppLogger.d("SCAN", "Short Phase 1 done — ${bearish.size} bearish candidates from ${phase1List.size} total")
+
+                    AppLogger.d("SHORT", "━━━ Short Scan Phase 1 ━━━")
+                    AppLogger.d("SHORT", "Total scanned: ${phase1List.size} | Bearish candidates: ${bearish.size}")
+                    AppLogger.d("SHORT", "Filter — by changePct<0.5: ${byChangePct.size} | by score<55: ${byScore.size}")
+                    if (bearish.isNotEmpty()) {
+                        val minScore = bearish.first().score
+                        val maxScore = bearish.last().score
+                        AppLogger.d("SHORT", "Score range: min=${String.format("%.1f", minScore)} max=${String.format("%.1f", maxScore)}")
+                        AppLogger.d("SHORT", "Top 5 most bearish:")
+                        bearish.take(5).forEachIndexed { i, s ->
+                            AppLogger.d("SHORT", "  #${i + 1} ${s.symbol} | score=${String.format("%.1f", s.score)} | changePct=${String.format("%.2f", s.changePct)}% | ltp=₹${String.format("%.2f", s.ltp)}")
+                        }
+                    } else {
+                        AppLogger.w("SHORT", "No bearish stocks found — market may be broadly bullish today")
+                    }
+
                     _scanResults.value = UiState.Success(bearish)
                     deepEnrichScanResults(bearish)
                 },
                 onFailure = {
-                    AppLogger.e("SCAN", "Short scan failed: ${it.message}")
-                    _scanResults.value = UiState.Error(it.message ?: "Short scan failed")
+                    AppLogger.e("SHORT", "Short scan failed: ${it.message}")
+                    // If the error says "Minimum capital needed" but capital is clearly
+                    // sufficient, the real issue is the category having no liquid stocks —
+                    // rewrite to a category-focused message instead of a capital-focused one.
+                    val rawMsg = it.message ?: "Short scan failed"
+                    val userMsg = if (rawMsg.contains("Minimum capital needed") && rawMsg.contains("No ")) {
+                        val firstLine = rawMsg.lines().firstOrNull() ?: rawMsg
+                        val categoryHint = firstLine
+                            .removePrefix("No ")
+                            .substringBefore(" stocks found")
+                            .replaceFirstChar { c -> c.uppercase() }
+                        "No liquid $categoryHint stocks found for Short scan.\n\n" +
+                        "${categoryHint}-cap stocks rarely have >1M daily volume — the Short scan requires high liquidity for safe intraday shorting.\n\n" +
+                        "💡 Try a different category:\n" +
+                        "  • All Stocks — widest universe\n" +
+                        "  • Mid Cap — good balance of liquidity + volatility\n" +
+                        "  • Penny — high-beta stocks, very bearish today"
+                    } else {
+                        rawMsg
+                    }
+                    _scanResults.value = UiState.Error(userMsg)
                 },
             )
         }
@@ -529,9 +575,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      *   • Progress updates per-stock as each one finishes (not at batch boundaries)
      */
     private suspend fun deepEnrichScanResults(phase1List: List<StockData>) {
-        val top15 = phase1List.sortedByDescending { it.score }.take(15)
+        val isShortMode = _isShortMode.value
+        // Short mode: enrich the 15 most BEARISH (lowest score); long mode: 15 most BULLISH (highest score)
+        val top15 = if (isShortMode)
+            phase1List.sortedBy { it.score }.take(15)
+        else
+            phase1List.sortedByDescending { it.score }.take(15)
         if (top15.isEmpty()) return
-        AppLogger.d("SCAN", "Phase 2 starting — enriching top ${top15.size} stocks")
+        AppLogger.d("SCAN", "Phase 2 starting — enriching top ${top15.size} stocks (shortMode=$isShortMode)")
 
         // ConcurrentHashMap — safe for simultaneous updates from 15 parallel coroutines
         val stockMap = ConcurrentHashMap(phase1List.associateBy { it.symbol })
@@ -542,14 +593,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             top15.map { stock ->
                 async {
                     val enriched = kotlinx.coroutines.withTimeoutOrNull(30_000L) {
-                        repo.analyseStockFromPhase1(stock).getOrNull()
+                        repo.analyseStockFromPhase1(stock, isShortMode = isShortMode).getOrNull()
                     } ?: stock   // fall back to Phase-1 version on timeout/error
 
                     stockMap[enriched.symbol] = enriched
                     _deepEnrichProgress.value = done.incrementAndGet() to top15.size
                     // Re-emit after every single stock — progress feels instant
                     _scanResults.value = UiState.Success(
-                        stockMap.values.sortedByDescending { it.score }
+                        if (isShortMode) stockMap.values.sortedBy { it.score }
+                        else stockMap.values.sortedByDescending { it.score }
                     )
                 }
             }.awaitAll()
@@ -597,7 +649,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         detailFetchInFlightSymbol = symbol   // set BEFORE coroutine to block any same-frame duplicate
         viewModelScope.launch {
             _stockDetail.value = UiState.Loading
-            val result = repo.analyseStock(symbol, fetchNews = false)  // technical only — fast
+            val result = repo.analyseStock(symbol, fetchNews = false, isShortMode = _isShortMode.value)  // technical only — fast
             detailFetchInFlightSymbol = null   // clear after fetch completes or fails
             _stockDetail.value = result.fold(
                 onSuccess = { UiState.Success(it) },
@@ -680,7 +732,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             _stockDetail.value   = UiState.Loading
             detailCacheSymbol    = symbol
             detailCacheTimestamp = System.currentTimeMillis()
-            val result = repo.analyseStock(symbol, fetchNews = false)
+            val result = repo.analyseStock(symbol, fetchNews = false, isShortMode = _isShortMode.value)
             detailFetchInFlightSymbol = null
             _stockDetail.value = result.fold(
                 onSuccess = { UiState.Success(it) },
@@ -709,13 +761,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             _singleStockAnalysis.value = UiState.Error("Add ${provider.label} API key in Settings → Data & AI Settings first")
             return
         }
-        AppLogger.d("AI", "analyzeCurrentStockWithAi — ${provider.label} stock=${stock.symbol} capital=₹$capital")
+        val shortMode = _isShortMode.value
+        AppLogger.d("AI", "analyzeCurrentStockWithAi — ${provider.label} stock=${stock.symbol} capital=₹$capital shortMode=$shortMode")
 
         val vix = (_marketOverview.value as? UiState.Success)?.data?.indiaVix ?: 0.0
         viewModelScope.launch {
             _singleStockAnalysis.value = UiState.Loading
             _singleStockAnalysis.value = aiAnalysisService
-                .analyzeSingleStock(config, capital, stock, news, vix)
+                .analyzeSingleStock(config, capital, stock, news, vix, shortMode)
                 .fold(
                     onSuccess = { UiState.Success(it) },
                     onFailure = {
@@ -733,8 +786,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     // ── Shared deep enrichment for top 20 stocks ─────────────────────────────────
     // Smart: skips stocks already deep-enriched by Phase 2 of the scan.
     // Example: Phase 2 analysed top 15 → AI needs top 20 → only 5 are fetched, not 20.
-    private suspend fun enrichTop20(stocks: List<StockData>, onProgress: (Int, Int) -> Unit): List<StockData> {
-        val top20 = stocks.sortedByDescending { it.score }.take(20)
+    private suspend fun enrichTop20(stocks: List<StockData>, isShortMode: Boolean = false, onProgress: (Int, Int) -> Unit): List<StockData> {
+        val top20 = if (isShortMode)
+            stocks.sortedBy { it.score }.take(20)          // most bearish first in short mode
+        else
+            stocks.sortedByDescending { it.score }.take(20) // most bullish first in long mode
 
         // isDeepEnriched = true means analyseStock() already ran (Phase 2 or detail screen)
         // Using this flag — NOT priceHistory — because history can be empty even after Phase 2
@@ -797,14 +853,21 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             _aiAnalysis.value = UiState.Loading
             _exportState.value = ExportState.Preparing(0, minOf(20, stocks.size))
 
-            val enrichedStocks = enrichTop20(stocks) { done, total ->
+            val isShortMode = _isShortMode.value
+            val enrichedStocks = enrichTop20(stocks, isShortMode) { done, total ->
                 _exportState.value = ExportState.Preparing(done, total)
             }
-            AppLogger.d("AI", "Enrichment complete — sending ${enrichedStocks.size} stocks to ${provider.label}")
+            // Cap at 50 to avoid Groq/OpenRouter TPM limits; short mode sends most bearish first
+            val stocksToSend = (if (isShortMode)
+                enrichedStocks.sortedBy { it.score }
+            else
+                enrichedStocks.sortedByDescending { it.score }
+            ).take(50)
+            AppLogger.d("AI", "Enrichment complete — sending ${stocksToSend.size} of ${enrichedStocks.size} stocks to ${provider.label} (shortMode=$isShortMode)")
             _exportState.value = ExportState.Idle
 
             val vix = (_marketOverview.value as? UiState.Success)?.data?.indiaVix ?: 0.0
-            _aiAnalysis.value = aiAnalysisService.analyzeStocks(config, capital, category, enrichedStocks, vix)
+            _aiAnalysis.value = aiAnalysisService.analyzeStocks(config, capital, category, stocksToSend, vix)
                 .fold(
                     onSuccess = { UiState.Success(it) },
                     onFailure = {
