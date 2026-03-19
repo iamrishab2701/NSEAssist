@@ -49,14 +49,11 @@ android {
             firebaseAppDistribution {
                 releaseNotes = """v${appVersionName} — What's new:
 
-• In-app session logger — view all network calls, navigation events, and scan activity in real time (Settings → Logs)
-• Upstox data source support — connect your Upstox account via OAuth2 for live market data
-• Data & AI Settings screen — unified screen to configure data source, Upstox credentials, and AI provider keys
-• Bug fix: scan cache added for Ready to Trade, ORB, and Morning Selloff modes — no more re-scan on back navigation
-• Bug fix: stock detail no longer triggers duplicate deep analysis on back navigation
-• Bug fix: SL Hit and Target Hit now require entering the actual exit price via a dialog — no more ₹0.0 outcomes
-• Bug fix: global trends refresh button throttled to once per 5 seconds — prevents accidental duplicate API calls
-• Bug fix: market overview screener fetched once instead of twice on app start"""
+• Upstox real-time data — LTP, Change%, Volume, and VWAP now fetched from Upstox instead of Yahoo Finance's 15-min delayed data
+• Fixed Upstox response key mismatch — Upstox returns NSE_EQ:SYMBOL in responses but sends NSE_EQ|ISIN in requests; now resolved correctly
+• Data & AI Settings — switch between Yahoo Finance and Upstox, configure API keys, and activate daily token
+• Token expiry banner — amber warning on home screen when Upstox token needs re-activation
+• In-app session logger — view all network requests, navigation, and scan activity in real time (Settings → Logs)"""
                 groups       = "testers"
             }
         }
