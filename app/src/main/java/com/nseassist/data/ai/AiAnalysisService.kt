@@ -150,6 +150,7 @@ class AiAnalysisService {
             AiProvider.GEMINI      -> callGemini(config, systemPrompt, prompt)
             AiProvider.OPENROUTER  -> callOpenRouter(config, systemPrompt, prompt)
             AiProvider.GROQ        -> callGroq(config, systemPrompt, prompt)
+            AiProvider.CLAUDE      -> callClaude(config, systemPrompt, prompt)
         }
 
     // ── Provider implementations ───────────────────────────────────────────────────
@@ -281,6 +282,37 @@ class AiAnalysisService {
                 ?.getAsJsonObject("message")
                 ?.get("content")?.asString
                 ?: error("Empty Groq response")
+        }
+    }
+
+    private fun callClaude(config: AiProviderConfig, systemPrompt: String, prompt: String): String {
+        val body = gson.toJson(
+            mapOf(
+                "model" to config.model,
+                "max_tokens" to 2048,
+                "system" to systemPrompt,
+                "messages" to listOf(
+                    mapOf("role" to "user", "content" to prompt),
+                ),
+                "temperature" to 0.2,
+            )
+        )
+        val request = Request.Builder()
+            .url("https://api.anthropic.com/v1/messages")
+            .header("x-api-key", config.apiKey)
+            .header("anthropic-version", "2023-06-01")
+            .header("Content-Type", "application/json")
+            .post(body.toRequestBody(JSON))
+            .build()
+
+        client.newCall(request).execute().use { response ->
+            val payload = response.body?.string().orEmpty()
+            if (!response.isSuccessful) error(readError(payload, response.code))
+            return JsonParser.parseString(payload).asJsonObject
+                .getAsJsonArray("content")
+                ?.firstOrNull()?.asJsonObject
+                ?.get("text")?.asString
+                ?: error("Empty Claude response")
         }
     }
 

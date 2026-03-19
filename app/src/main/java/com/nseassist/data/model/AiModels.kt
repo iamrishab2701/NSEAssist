@@ -4,7 +4,8 @@ enum class AiProvider(val routeValue: String, val label: String, val defaultMode
     OPENAI("openai", "OpenAI", "gpt-4o-mini"),
     GEMINI("gemini", "Gemini", "gemini-2.5-flash"),
     OPENROUTER("openrouter", "OpenRouter", "openai/gpt-oss-20b:free"),
-    GROQ("groq", "Groq", "llama-3.1-8b-instant");
+    GROQ("groq", "Groq", "llama-3.1-8b-instant"),
+    CLAUDE("claude", "Claude", "claude-sonnet-4-6");
 
     companion object {
         fun fromRouteValue(value: String?): AiProvider? =

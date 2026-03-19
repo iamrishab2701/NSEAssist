@@ -49,12 +49,7 @@ android {
             firebaseAppDistribution {
                 releaseNotes = """v${appVersionName} — What's new:
 
-• Short Mode — dedicated Short tab now fully isolated; AI analysis, QuickTake language, and scan results all switch to short/bearish perspective when Short tab is active
-• Two-pool screener fix — scan now always fetches a cheap-pool + broader-pool in parallel and merges results; higher capital no longer returns fewer affordable stocks due to Yahoo TOP-N bias
-• Short scan sort — stocks sorted ascending (most bearish first) in Short mode instead of descending
-• Short QuickTake — AI-generated one-liners correctly say "Short ↓ below ₹X" in Short mode, "Long ↑ above ₹X" elsewhere
-• isShortMode propagation — short-mode flag now flows end-to-end: scan → analyseStock → generateQuickTake → AI analysis prompt
-• Upstox regression clean — all scan modes (Normal, ORB, Ready to Trade, Morning Selloff, Short) verified working with Upstox overlay (single-batch, ~50 ms for 184 stocks)"""
+• Claude AI provider — Anthropic Claude (claude-sonnet-4-6) is now available as a fifth AI provider alongside OpenAI, Gemini, Groq, and OpenRouter; add your Claude API key in Data & AI Settings to use it for both batch and single-stock analysis"""
                 groups       = "testers"
             }
         }
