@@ -488,6 +488,36 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
+     * Short scan — same universe as normal scan but filtered for bearish stocks and
+     * sorted ascending by score (most bearish first).
+     */
+    fun scanShort(capital: Double, category: ScanCategory) {
+        _capital.value = capital
+        // Invalidate normal scan cache so switching back to Buy tab re-fetches correctly
+        scanCacheTimestamp = 0L
+        viewModelScope.launch {
+            AppLogger.d("SCAN", "scanShort capital=₹$capital category=${category.routeValue}")
+            _scanResults.value = UiState.Loading
+            _deepEnrichProgress.value = null
+            repo.scanAffordableStocks(capital, category).fold(
+                onSuccess = { phase1List ->
+                    // Keep stocks that are bearish: negative change OR below VWAP OR low score
+                    val bearish = phase1List
+                        .filter { it.changePct < 0.5 || it.score < 55 }
+                        .sortedBy { it.score }  // lowest (most bearish) first
+                    AppLogger.d("SCAN", "Short Phase 1 done — ${bearish.size} bearish candidates from ${phase1List.size} total")
+                    _scanResults.value = UiState.Success(bearish)
+                    deepEnrichScanResults(bearish)
+                },
+                onFailure = {
+                    AppLogger.e("SCAN", "Short scan failed: ${it.message}")
+                    _scanResults.value = UiState.Error(it.message ?: "Short scan failed")
+                },
+            )
+        }
+    }
+
+    /**
      * Phase 2: enrich the top 15 stocks with full technical indicators.
      *
      * Optimisations vs the old approach:

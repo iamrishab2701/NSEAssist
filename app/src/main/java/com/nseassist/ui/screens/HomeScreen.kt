@@ -10,9 +10,12 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
+import androidx.compose.material.icons.automirrored.filled.TrendingDown
 import androidx.compose.material.icons.filled.CurrencyRupee
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.ShowChart
 import androidx.compose.material.icons.filled.Public
@@ -48,8 +51,8 @@ private enum class HomeTab(val label: String) {
     Market("Market"),
     Trends("Trends"),
     Capital("Capital"),
+    Short("Short"),
     Search("Search"),
-    Settings("Settings"),
 }
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
@@ -61,12 +64,14 @@ fun HomeScreen(navController: NavController, vm: MainViewModel) {
     val testMorningSelloff  by vm.testMorningSelloff.collectAsState()
     val dataSource          by vm.dataSource.collectAsState()
     val upstoxTokenValid    by vm.upstoxTokenValid.collectAsState()
+    val themeMode by vm.themeMode.collectAsState()
     var capital by remember { mutableStateOf("") }
     var stockQuery by remember { mutableStateOf("") }
     var selectedCategory by rememberSaveable { mutableStateOf(ScanCategory.ALL.routeValue) }
     var selectedTab by rememberSaveable { mutableStateOf(HomeTab.Market.name) }
     val currentTab = HomeTab.valueOf(selectedTab)
     val currentCategory = ScanCategory.fromRouteValue(selectedCategory)
+    var showHamburger by remember { mutableStateOf(false) }
 
     AppGradientBackground {
     Scaffold(
@@ -96,16 +101,16 @@ fun HomeScreen(navController: NavController, vm: MainViewModel) {
                         onClick = { selectedTab = tab.name },
                         icon = {
                             when (tab) {
-                                HomeTab.Market   -> Icon(Icons.Filled.ShowChart, contentDescription = null)
-                                HomeTab.Trends   -> Icon(Icons.Filled.Public, contentDescription = null)
-                                HomeTab.Capital  -> Icon(Icons.Filled.CurrencyRupee, contentDescription = null)
-                                HomeTab.Search   -> Icon(Icons.Default.Search, contentDescription = null)
-                                HomeTab.Settings -> Icon(Icons.Default.Settings, contentDescription = null)
+                                HomeTab.Market  -> Icon(Icons.Filled.ShowChart, contentDescription = null)
+                                HomeTab.Trends  -> Icon(Icons.Filled.Public, contentDescription = null)
+                                HomeTab.Capital -> Icon(Icons.Filled.CurrencyRupee, contentDescription = null)
+                                HomeTab.Short   -> Icon(Icons.AutoMirrored.Filled.TrendingDown, contentDescription = null)
+                                HomeTab.Search  -> Icon(Icons.Default.Search, contentDescription = null)
                             }
                         },
                         label = { Text(tab.label) },
                         colors = NavigationBarItemDefaults.colors(
-                            selectedIconColor = BluePrimary,
+                            selectedIconColor = if (tab == HomeTab.Short) RedBear else BluePrimary,
                             selectedTextColor = TextPrimary,
                             indicatorColor = SurfaceDark,
                             unselectedIconColor = TextSecondary,
@@ -113,6 +118,20 @@ fun HomeScreen(navController: NavController, vm: MainViewModel) {
                         ),
                     )
                 }
+                // Hamburger — Settings, Logs, About
+                NavigationBarItem(
+                    selected = false,
+                    onClick = { showHamburger = true },
+                    icon = { Icon(Icons.Default.Menu, contentDescription = "More") },
+                    label = { Text("More") },
+                    colors = NavigationBarItemDefaults.colors(
+                        selectedIconColor = BluePrimary,
+                        selectedTextColor = TextPrimary,
+                        indicatorColor = SurfaceDark,
+                        unselectedIconColor = TextSecondary,
+                        unselectedTextColor = TextSecondary,
+                    ),
+                )
             }
         },
         containerColor = Color.Transparent,
@@ -159,13 +178,102 @@ fun HomeScreen(navController: NavController, vm: MainViewModel) {
                         if (symbol.isNotBlank()) navController.navigate("stock/$symbol")
                     },
                 )
-                HomeTab.Settings -> {
-                    val themeMode by vm.themeMode.collectAsState()
-                    AiSettingsTab(
-                        themeMode  = themeMode,
-                        onTheme    = vm::setThemeMode,
-                        onNavigate = { navController.navigate(it) },
+                HomeTab.Short -> {
+                    if (dataSource == AiSettingsStore.DATA_SOURCE_UPSTOX && !upstoxTokenValid) {
+                        UpstoxTokenBanner(onGoToSettings = { navController.navigate("settings/model-config") })
+                    }
+                    ShortScanCard(
+                        capital = capital,
+                        category = currentCategory,
+                        onCapitalChange = { capital = it },
+                        onCategoryChange = { selectedCategory = it.routeValue },
+                        onScan = {
+                            val amt = capital.toDoubleOrNull() ?: 0.0
+                            if (amt > 0) navController.navigate("scan/$amt/${currentCategory.routeValue}/short")
+                        },
                     )
+                }
+            }
+        }
+    }
+    // ── Hamburger bottom sheet ────────────────────────────────────────────────
+    if (showHamburger) {
+        ModalBottomSheet(
+            onDismissRequest = { showHamburger = false },
+            containerColor = CardDark,
+        ) {
+            Column(modifier = Modifier.padding(bottom = 32.dp)) {
+                Text(
+                    "More",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 16.sp,
+                    color = TextPrimary,
+                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp),
+                )
+                HorizontalDivider(color = SurfaceDark)
+                // Theme toggle
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 20.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    Text("Dark Theme", fontSize = 15.sp, color = TextPrimary)
+                    Switch(
+                        checked = themeMode == ThemeMode.DARK,
+                        onCheckedChange = { vm.setThemeMode(if (it) ThemeMode.DARK else ThemeMode.LIGHT) },
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = BluePrimary,
+                            checkedTrackColor = BluePrimary.copy(alpha = 0.3f),
+                        ),
+                    )
+                }
+                HorizontalDivider(color = SurfaceDark)
+                // Data & AI Settings
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable {
+                            showHamburger = false
+                            navController.navigate("settings/model-config")
+                        }
+                        .padding(horizontal = 20.dp, vertical = 16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(16.dp),
+                ) {
+                    Icon(Icons.Default.Settings, contentDescription = null, tint = TextSecondary)
+                    Text("Data & AI Settings", fontSize = 15.sp, color = TextPrimary)
+                }
+                // Session Logs
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable {
+                            showHamburger = false
+                            navController.navigate("logs")
+                        }
+                        .padding(horizontal = 20.dp, vertical = 16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(16.dp),
+                ) {
+                    Icon(Icons.Filled.TrendingUp, contentDescription = null, tint = TextSecondary)
+                    Text("Session Logs", fontSize = 15.sp, color = TextPrimary)
+                }
+                // About
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable {
+                            showHamburger = false
+                            navController.navigate("settings/about")
+                        }
+                        .padding(horizontal = 20.dp, vertical = 16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(16.dp),
+                ) {
+                    Icon(Icons.Default.Info, contentDescription = null, tint = TextSecondary)
+                    Text("About NSEAssist", fontSize = 15.sp, color = TextPrimary)
                 }
             }
         }
@@ -554,6 +662,82 @@ private fun CapitalInputCard(
                     },
                     fontWeight = FontWeight.Bold,
                 )
+            }
+        }
+    }
+}
+
+// ── Short Mode scan card ──────────────────────────────────────────────────────
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun ShortScanCard(
+    capital: String,
+    category: ScanCategory,
+    onCapitalChange: (String) -> Unit,
+    onCategoryChange: (ScanCategory) -> Unit,
+    onScan: () -> Unit,
+) {
+    Card(
+        colors = CardDefaults.cardColors(containerColor = CardDark),
+        border = BorderStroke(1.dp, RedBear.copy(alpha = 0.3f)),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Icon(Icons.AutoMirrored.Filled.TrendingDown, contentDescription = null, tint = RedBear)
+                Text("Short Mode", fontWeight = FontWeight.Bold, fontSize = 16.sp, color = RedBear)
+            }
+            Text(
+                "Finds stocks going DOWN. Use SELL (MIS) in Kite to short them.",
+                color = TextSecondary, fontSize = 12.sp,
+            )
+            // Capital input
+            OutlinedTextField(
+                value = capital,
+                onValueChange = onCapitalChange,
+                label = { Text("Capital (₹)") },
+                prefix = { Text("₹") },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                keyboardActions = KeyboardActions(onDone = { onScan() }),
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Text("Stock Type", fontWeight = FontWeight.SemiBold, fontSize = 14.sp, color = TextPrimary)
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                ScanCategory.values().forEach { option ->
+                    FilterChip(
+                        selected = category == option,
+                        onClick = { onCategoryChange(option) },
+                        label = { Text(option.label) },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = RedBear.copy(alpha = 0.15f),
+                            selectedLabelColor = RedBear,
+                        ),
+                    )
+                }
+            }
+            // Warning info
+            Surface(
+                color = RedBear.copy(alpha = 0.08f),
+                shape = RoundedCornerShape(8.dp),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(
+                    "⚠ Only short when NIFTY is falling. Never short on a strongly bullish day.",
+                    color = RedBear.copy(alpha = 0.9f),
+                    fontSize = 11.sp,
+                    modifier = Modifier.padding(10.dp),
+                )
+            }
+            Button(
+                onClick = onScan,
+                enabled = (capital.toDoubleOrNull() ?: 0.0) > 0,
+                modifier = Modifier.fillMaxWidth(),
+                colors = ButtonDefaults.buttonColors(containerColor = RedBear, contentColor = Color.White),
+            ) {
+                Icon(Icons.AutoMirrored.Filled.TrendingDown, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("Find Stocks to Short", fontWeight = FontWeight.Bold)
             }
         }
     }

@@ -65,11 +65,13 @@ fun ScanScreen(
     var showProviderPicker by remember { mutableStateOf(false) }
 
     val isDeepScan = scanMode == "breakouts" || scanMode == "trade" || scanMode == "oversold"
+    val isShortMode = scanMode == "short"
     LaunchedEffect(capital, category, scanMode) {
         when (scanMode) {
             "trade"     -> vm.scanReadyToTrade(capital, category, orbBreakoutMode = true)
             "breakouts" -> vm.scanReadyToTrade(capital, category, orbBreakoutMode = false)
             "oversold"  -> vm.scanOversoldBounce(capital)
+            "short"     -> vm.scanShort(capital, category)
             else        -> vm.scanStocks(capital, category)
         }
     }
@@ -84,6 +86,7 @@ fun ScanScreen(
                             "trade"    -> "Ready to Trade  ·  ₹${String.format("%,.0f", capital)}"
                             "breakouts"-> "Breakouts  ·  ₹${String.format("%,.0f", capital)}"
                             "oversold" -> "Morning Selloff  ·  ₹${String.format("%,.0f", capital)}"
+                            "short"    -> "📉 Short Scan  ·  ₹${String.format("%,.0f", capital)}"
                             else       -> "${category.label} Stocks  ·  ₹${String.format("%,.0f", capital)}"
                         }
                     )
@@ -131,6 +134,7 @@ fun ScanScreen(
                         color = when (scanMode) {
                             "trade"    -> GreenBull
                             "oversold" -> AmberWarn
+                            "short"    -> RedBear
                             else       -> BluePrimary
                         }
                     )
@@ -139,6 +143,7 @@ fun ScanScreen(
                             "trade"    -> "Finding Ready to Trade stocks…"
                             "breakouts"-> "Finding Breakout stocks…"
                             "oversold" -> "Scanning for Morning Selloff stocks…"
+                            "short"    -> "Finding stocks to short…"
                             else       -> "Scanning NSE market…"
                         },
                         color = TextSecondary, fontWeight = FontWeight.SemiBold,
@@ -167,10 +172,14 @@ fun ScanScreen(
                             when (scanMode) {
                                 "trade"     -> vm.scanReadyToTrade(capital, category, orbBreakoutMode = true)
                                 "breakouts" -> vm.scanReadyToTrade(capital, category, orbBreakoutMode = false)
+                                "short"     -> vm.scanShort(capital, category)
                                 else        -> vm.scanStocks(capital, category)
                             }
                         },
-                        colors = ButtonDefaults.buttonColors(containerColor = BluePrimary, contentColor = Color.White),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = if (scanMode == "short") RedBear else BluePrimary,
+                            contentColor = Color.White,
+                        ),
                     ) {
                         Text("Retry", fontWeight = FontWeight.Bold)
                     }
@@ -239,10 +248,25 @@ fun ScanScreen(
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
                     item {
-                        Text(
-                            "${stocks.size} ${category.label.lowercase()} stocks within ₹${String.format("%,.0f", capital)} — tap for deep analysis",
-                            color = TextSecondary, fontSize = 12.sp,
-                        )
+                        if (isShortMode) {
+                            Surface(
+                                color = RedBear.copy(alpha = 0.10f),
+                                shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp),
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                Text(
+                                    "📉 SHORT MODE — ${stocks.size} bearish stocks sorted most bearish first. Use SELL (MIS) in Kite.",
+                                    color = RedBear,
+                                    fontSize = 12.sp,
+                                    modifier = Modifier.padding(10.dp),
+                                )
+                            }
+                        } else {
+                            Text(
+                                "${stocks.size} ${category.label.lowercase()} stocks within ₹${String.format("%,.0f", capital)} — tap for deep analysis",
+                                color = TextSecondary, fontSize = 12.sp,
+                            )
+                        }
                     }
                     deepEnrichProgress?.let { (done, total) ->
                         item { DeepEnrichBanner(done = done, total = total) }
