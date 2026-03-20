@@ -401,7 +401,9 @@ class NSERepository {
             val trend6M = indicators.trend6Month(closes)
             val trend2W = indicators.trend2Week(closes)
 
-            val prediction = indicators.predictPrice(closes, atr, volumes)
+            // Anchor regression to live price when market is open
+            val closesForPrediction = if (ltp > 0.0 && ltp != closes.lastOrNull()) closes + ltp else closes
+            val prediction = indicators.predictPrice(closesForPrediction, atr, volumes)
 
             val gapType = when {
                 open > prevClose * 1.005 -> "GAP UP"
@@ -475,6 +477,7 @@ class NSERepository {
                 rsi                   = rsi,
                 macdLine              = macdLine,
                 macdSignal            = macdSignal,
+                marketCondition       = marketConditionOrNeutral(),
             )
 
             val stockData = StockData(
@@ -565,6 +568,10 @@ class NSERepository {
         profileCache[symbol] = now to fresh
         return fresh
     }
+
+    /** Returns cached market condition synchronously (no network call) — NEUTRAL if not yet fetched. */
+    private fun marketConditionOrNeutral(): StockScorer.MarketCondition =
+        niftyConditionCache ?: StockScorer.MarketCondition.NEUTRAL
 
     /** Returns cached NIFTY MarketCondition or fetches a fresh one (cached for 5 min). */
     private suspend fun cachedMarketCondition(): StockScorer.MarketCondition {
@@ -657,7 +664,9 @@ class NSERepository {
                 val trend      = trendDetector.detect(closes, volumes.map { it.toLong() })
                 val trend6M    = indicators.trend6Month(closes)
                 val trend2W    = indicators.trend2Week(closes)
-                val prediction = indicators.predictPrice(closes, atr, volumes)
+                // Anchor regression to live price when market is open
+                val closesForPrediction = if (ltp > 0.0 && ltp != closes.lastOrNull()) closes + ltp else closes
+                val prediction = indicators.predictPrice(closesForPrediction, atr, volumes)
 
                 // ── 30-min intraday analysis ─────────────────────────────────
                 val thirtyMinBars = intraday?.candles ?: emptyList()
@@ -725,6 +734,7 @@ class NSERepository {
                     rsi                   = rsi,
                     macdLine              = macdLine,
                     macdSignal            = macdSignal,
+                    marketCondition       = marketConditionOrNeutral(),
                 )
 
                 val stockData = phase1.copy(
@@ -1099,6 +1109,7 @@ class NSERepository {
         rsi: Double,
         macdLine: Double,
         macdSignal: Double,
+        marketCondition: StockScorer.MarketCondition = StockScorer.MarketCondition.NEUTRAL,
     ): TechnicalIndicators.PricePrediction {
         var high       = raw.high
         var low        = raw.low
@@ -1174,20 +1185,26 @@ class NSERepository {
             }
         }
 
-        // ── 4. ORB-based range tightening ─────────────────────────────────────────
+        // ── 4. ORB-based range tightening + breakout confirmation boost ───────────
         if (orbHigh > 0.0 && orbLow > 0.0) {
             when {
                 ltp > orbHigh -> {
                     // Bullish breakout — ORB high becomes support, floor the low there
-                    low        = maxOf(low, orbHigh * 0.998)
-                    if (direction == "Down") { direction = "Sideways"; confidence = (confidence - 5).coerceAtLeast(30) }
-                    reasons   += "orb:above→floor_at_orbHigh"
+                    low = maxOf(low, orbHigh * 0.998)
+                    when (direction) {
+                        "Up"   -> { confidence = (confidence + 8).coerceAtMost(100); reasons += "orb:above_confirmed+8" }
+                        "Down" -> { direction = "Sideways"; confidence = (confidence - 5).coerceAtLeast(30); reasons += "orb:above→floor_at_orbHigh" }
+                        else   -> reasons += "orb:above→floor_at_orbHigh"
+                    }
                 }
                 ltp < orbLow -> {
                     // Bearish breakdown — ORB low becomes resistance, cap the high there
-                    high       = minOf(high, orbLow * 1.002)
-                    if (direction == "Up") { direction = "Sideways"; confidence = (confidence - 5).coerceAtLeast(30) }
-                    reasons   += "orb:below→cap_at_orbLow"
+                    high = minOf(high, orbLow * 1.002)
+                    when (direction) {
+                        "Down" -> { confidence = (confidence + 8).coerceAtMost(100); reasons += "orb:below_confirmed+8" }
+                        "Up"   -> { direction = "Sideways"; confidence = (confidence - 5).coerceAtLeast(30); reasons += "orb:below→cap_at_orbLow" }
+                        else   -> reasons += "orb:below→cap_at_orbLow"
+                    }
                 }
                 else -> {
                     // Inside ORB — direction unclear, reduce confidence slightly
@@ -1197,33 +1214,44 @@ class NSERepository {
             }
         }
 
-        // ── 5. Signal alignment confidence boost ──────────────────────────────────
-        val bullCount = listOf(
-            aboveVwap,
-            rsi in 45.0..65.0,
-            macdLine > macdSignal,
-            supertrendSignal == "BUY",
-            thirtyMinCandleSignal == TechnicalIndicators.CandleSignal.BULLISH,
-            adxDiPlus > adxDiMinus && adx >= 25.0,
-        ).count { it }
+        // ── 5. Weighted signal alignment confidence boost ─────────────────────────
+        // Weights: VWAP=2, MACD=2, Supertrend=2, ADX=1, 30-min candle=1, RSI=1 (max=9)
+        val bullScore = listOf(
+            if (aboveVwap) 2 else 0,
+            if (macdLine > macdSignal) 2 else 0,
+            if (supertrendSignal == "BUY") 2 else 0,
+            if (adxDiPlus > adxDiMinus && adx >= 25.0) 1 else 0,
+            if (thirtyMinCandleSignal == TechnicalIndicators.CandleSignal.BULLISH) 1 else 0,
+            if (rsi in 45.0..65.0) 1 else 0,
+        ).sum()
 
-        val bearCount = listOf(
-            !aboveVwap,
-            rsi > 70.0 || rsi < 30.0,
-            macdLine < macdSignal,
-            supertrendSignal == "SELL",
-            thirtyMinCandleSignal == TechnicalIndicators.CandleSignal.BEARISH,
-            adxDiMinus > adxDiPlus && adx >= 25.0,
-        ).count { it }
+        val bearScore = listOf(
+            if (!aboveVwap) 2 else 0,
+            if (macdLine < macdSignal) 2 else 0,
+            if (supertrendSignal == "SELL") 2 else 0,
+            if (adxDiMinus > adxDiPlus && adx >= 25.0) 1 else 0,
+            if (thirtyMinCandleSignal == TechnicalIndicators.CandleSignal.BEARISH) 1 else 0,
+            if (rsi > 70.0 || rsi < 30.0) 1 else 0,
+        ).sum()
 
-        val alignCount = if (direction == "Up") bullCount else if (direction == "Down") bearCount else 0
-        val alignBoost = when (alignCount) { 6 -> 15; 5 -> 10; 4 -> 7; 3 -> 3; else -> 0 }
+        val alignScore = if (direction == "Up") bullScore else if (direction == "Down") bearScore else 0
+        val alignBoost = when {
+            alignScore >= 8 -> 15; alignScore >= 6 -> 10; alignScore >= 4 -> 7; alignScore >= 2 -> 3; else -> 0
+        }
         confidence = (confidence + alignBoost).coerceAtMost(100)
-        if (alignBoost > 0) reasons += "align:${alignCount}/6+${alignBoost}"
+        if (alignBoost > 0) reasons += "align:${alignScore}/9+${alignBoost}"
 
         // Penalty when signal direction conflicts with dominant signal set
-        if (direction == "Up"   && bearCount > bullCount) { confidence = (confidence - 10).coerceAtLeast(30); reasons += "align:bull_conflict-10" }
-        if (direction == "Down" && bullCount > bearCount) { confidence = (confidence - 10).coerceAtLeast(30); reasons += "align:bear_conflict-10" }
+        if (direction == "Up"   && bearScore > bullScore) { confidence = (confidence - 10).coerceAtLeast(30); reasons += "align:bull_conflict-10" }
+        if (direction == "Down" && bullScore > bearScore) { confidence = (confidence - 10).coerceAtLeast(30); reasons += "align:bear_conflict-10" }
+
+        // ── 5b. NIFTY market direction conflict penalty ────────────────────────────
+        if (direction == "Up"   && marketCondition == StockScorer.MarketCondition.BEARISH) {
+            confidence = (confidence - 8).coerceAtLeast(30); reasons += "mkt:bearish_conflict-8"
+        }
+        if (direction == "Down" && marketCondition == StockScorer.MarketCondition.BULLISH) {
+            confidence = (confidence - 8).coerceAtLeast(30); reasons += "mkt:bullish_conflict-8"
+        }
 
         // ── 6. ADX-adjusted confidence ────────────────────────────────────────────
         val adxAligned = (direction == "Up" && adxDiPlus > adxDiMinus) || (direction == "Down" && adxDiMinus > adxDiPlus)
