@@ -724,7 +724,7 @@ private fun StockDetailContent(
         }
 
         // Quick Take — plain English summary (shown only when 30-min data is available)
-        stock.quickTake?.let { QuickTakeCard(it, aiAnalysis = aiAnalysis, isAiLoading = isAiLoading) }
+        stock.quickTake?.let { QuickTakeCard(it, aiAnalysis = aiAnalysis) }
 
         // Price header
         Card(colors = CardDefaults.cardColors(containerColor = CardDark)) {
@@ -1065,7 +1065,6 @@ private fun newsColor(sentiment: NewsSentiment) = when (sentiment) {
 private fun QuickTakeCard(
     qt: QuickTake,
     aiAnalysis: SingleStockAiAnalysis? = null,
-    isAiLoading: Boolean = false,
 ) {
     // Use AI target/stop when the AI returned a GO verdict with real values
     val useAiValues = aiAnalysis != null &&
@@ -1177,7 +1176,7 @@ private fun QuickTakeCard(
                 }
             }
 
-            if (qt.target != "—" || isAiLoading || useAiValues) {
+            if (qt.target != "—" || useAiValues) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Surface(
                         shape = RoundedCornerShape(10.dp),
@@ -1197,11 +1196,7 @@ private fun QuickTakeCard(
                                     }
                                 }
                             }
-                            if (isAiLoading && !useAiValues) {
-                                CircularProgressIndicator(modifier = Modifier.size(14.dp), color = GreenBull, strokeWidth = 2.dp)
-                            } else {
-                                Text(displayTarget, color = GreenBull, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
-                            }
+                            Text(displayTarget, color = GreenBull, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
                         }
                     }
                     Surface(
@@ -1222,11 +1217,7 @@ private fun QuickTakeCard(
                                     }
                                 }
                             }
-                            if (isAiLoading && !useAiValues) {
-                                CircularProgressIndicator(modifier = Modifier.size(14.dp), color = RedBear, strokeWidth = 2.dp)
-                            } else {
-                                Text(displayStopLoss, color = RedBear, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
-                            }
+                            Text(displayStopLoss, color = RedBear, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
                         }
                     }
                 }
