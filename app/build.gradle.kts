@@ -49,7 +49,9 @@ android {
             firebaseAppDistribution {
                 releaseNotes = """v${appVersionName} — What's new:
 
-• Claude AI provider — Anthropic Claude (claude-sonnet-4-6) is now available as a fifth AI provider alongside OpenAI, Gemini, Groq, and OpenRouter; add your Claude API key in Data & AI Settings to use it for both batch and single-stock analysis"""
+• AI auto-analysis on stock open — designate a Primary AI provider in Data & AI Settings; when you open any stock the AI runs automatically and its Target/Stop Loss replace the algorithmic values in Quick Take (shown with an AI badge)
+• Target & Stop Loss always visible — Quick Take now shows Target and Stop Loss for all regular/capital-search stocks, not just bullish ones
+• Primary AI badge — the configured primary provider shows a ★ Primary badge; tap "Set as Primary" on any other configured provider to switch"""
                 groups       = "testers"
             }
         }
