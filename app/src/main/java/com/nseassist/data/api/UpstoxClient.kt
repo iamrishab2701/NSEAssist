@@ -270,8 +270,10 @@ object UpstoxClient {
                         val netChg   = q.get("net_change")?.asDouble  ?: (ltp - prevClose)
                         val chgPct   = if (prevClose > 0) (netChg / prevClose) * 100.0 else 0.0
                         val vol      = q.get("volume")?.asLong        ?: 0L
-                        // Upstox returns actual VWAP as average_trade_price
+                        // Upstox returns actual VWAP as average_trade_price.
+                        // When market is closed (holiday/weekend), Upstox returns 0 — treat as missing.
                         val vwap     = q.get("average_trade_price")?.asDouble
+                            ?.takeIf { it > 0.0 }
                             ?: ((high + low + ltp) / 3.0)
 
                         result.add(

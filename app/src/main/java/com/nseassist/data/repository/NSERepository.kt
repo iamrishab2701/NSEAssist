@@ -287,17 +287,18 @@ class NSERepository {
                 uq.open < uq.prevClose * 0.995 -> "GAP DOWN"
                 else                            -> "FLAT"
             }
+            val effectiveVolume = if (uq.volume > 0L) uq.volume else sd.volume
             sd.copy(
                 ltp         = uq.ltp,
                 change      = uq.change,
                 changePct   = uq.changePct,
                 dayHigh     = uq.dayHigh,
                 dayLow      = uq.dayLow,
-                volume      = uq.volume,
+                volume      = effectiveVolume,
                 vwap        = uq.vwap,
                 open        = uq.open,
                 aboveVwap   = uq.ltp > uq.vwap,
-                volumeSpike = sd.avgVolume > 0 && uq.volume > sd.avgVolume * 1.5,
+                volumeSpike = sd.avgVolume > 0 && effectiveVolume > sd.avgVolume * 1.5,
                 gapType     = gapType,
             )
         }
@@ -385,7 +386,7 @@ class NSERepository {
             val changePct = upstoxQuote?.changePct ?: quote.changePct
             val dayHigh   = upstoxQuote?.dayHigh   ?: quote.dayHigh
             val dayLow    = upstoxQuote?.dayLow    ?: quote.dayLow
-            val volume    = upstoxQuote?.volume    ?: quote.volume
+            val volume    = upstoxQuote?.volume?.takeIf { it > 0L } ?: quote.volume
             val open      = upstoxQuote?.open      ?: quote.open
             val vwap      = upstoxQuote?.vwap      ?: (dayHigh + dayLow + ltp) / 3
             val aboveVwap = ltp > vwap
