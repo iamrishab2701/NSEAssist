@@ -55,7 +55,8 @@ android {
 • NIFTY conflict penalty — if a stock's predicted direction contradicts NIFTY's market trend, confidence is penalised to avoid false signals
 • ORB breakout boost — confirmed breakout above ORB high or breakdown below ORB low now adds confidence instead of just adjusting the range
 • Confidence cap — maximum confidence capped at 88% to keep predictions honest; no more unrealistically high scores on strong-trend days
-• Faster NIFTY cache warm-up — market condition is now ready before your first scan, so the penalty works from the very first prediction"""
+• Faster NIFTY cache warm-up — market condition is now ready before your first scan, so the penalty works from the very first prediction
+• Fix: Upstox VWAP and volume on closed market days — when market is closed or it's a weekend, Upstox returns 0 for VWAP and volume; the app now correctly falls back to calculated VWAP and Yahoo's volume instead of using the invalid 0 values"""
                 groups       = "testers"
             }
         }

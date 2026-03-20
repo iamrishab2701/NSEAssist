@@ -579,7 +579,7 @@ class NSERepository {
 
     /** Returns cached market condition synchronously (no network call) — NEUTRAL if not yet fetched. */
     private fun marketConditionOrNeutral(): StockScorer.MarketCondition =
-        niftyConditionCache ?: StockScorer.MarketCondition.NEUTRAL
+        niftyConditionCache ?: StockScorer.MarketCondition.CHOPPY
 
     /** Returns cached NIFTY MarketCondition or fetches a fresh one (cached for 5 min). */
     private suspend fun cachedMarketCondition(): StockScorer.MarketCondition {
@@ -1117,7 +1117,7 @@ class NSERepository {
         rsi: Double,
         macdLine: Double,
         macdSignal: Double,
-        marketCondition: StockScorer.MarketCondition = StockScorer.MarketCondition.NEUTRAL,
+        marketCondition: StockScorer.MarketCondition = StockScorer.MarketCondition.CHOPPY,
     ): TechnicalIndicators.PricePrediction {
         var high       = raw.high
         var low        = raw.low
