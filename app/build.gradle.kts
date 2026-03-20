@@ -49,7 +49,11 @@ android {
             firebaseAppDistribution {
                 releaseNotes = """v${appVersionName} — What's new:
 
-• Fix: Quick Take Target/Stop Loss boxes no longer show as empty coloured boxes while AI is loading — algorithmic values are shown immediately and swap to AI values once analysis completes"""
+• AI auto-analysis on stock open — set a Primary AI provider in Data & AI Settings; AI runs automatically when you open any stock and overlays its Target/Stop Loss in Quick Take with an AI badge when the verdict is GO
+• Target & Stop Loss always visible — Quick Take now shows Target and Stop Loss for all regular and capital-search stocks, not just bullish ones
+• Primary AI badge — configured primary provider shows a ★ Primary badge; tap "Set as Primary" on any other provider to switch
+• Claude AI provider — Anthropic Claude (claude-sonnet-4-6) is available as a fifth AI provider alongside OpenAI, Gemini, Groq, and OpenRouter
+• Fix: AI button (FAB) no longer appears washed-out while analysis is loading"""
                 groups       = "testers"
             }
         }
