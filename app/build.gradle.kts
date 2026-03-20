@@ -49,11 +49,13 @@ android {
             firebaseAppDistribution {
                 releaseNotes = """v${appVersionName} — What's new:
 
-• AI auto-analysis on stock open — set a Primary AI provider in Data & AI Settings; AI runs automatically when you open any stock and overlays its Target/Stop Loss in Quick Take with an AI badge when the verdict is GO
-• Target & Stop Loss always visible — Quick Take now shows Target and Stop Loss for all regular and capital-search stocks, not just bullish ones
-• Primary AI badge — configured primary provider shows a ★ Primary badge; tap "Set as Primary" on any other provider to switch
-• Claude AI provider — Anthropic Claude (claude-sonnet-4-6) is available as a fifth AI provider alongside OpenAI, Gemini, Groq, and OpenRouter
-• Fix: AI button (FAB) no longer appears washed-out while analysis is loading"""
+• Smarter price predictions — prediction range now anchors to live price during market hours, so targets reflect today's actual price action
+• Adaptive prediction bands — bands automatically widen for stocks moving more than usual, reducing false range violations
+• Weighted signal scoring — VWAP, MACD, and Supertrend now count double in the confidence calculation; stronger signals carry more weight
+• NIFTY conflict penalty — if a stock's predicted direction contradicts NIFTY's market trend, confidence is penalised to avoid false signals
+• ORB breakout boost — confirmed breakout above ORB high or breakdown below ORB low now adds confidence instead of just adjusting the range
+• Confidence cap — maximum confidence capped at 88% to keep predictions honest; no more unrealistically high scores on strong-trend days
+• Faster NIFTY cache warm-up — market condition is now ready before your first scan, so the penalty works from the very first prediction"""
                 groups       = "testers"
             }
         }

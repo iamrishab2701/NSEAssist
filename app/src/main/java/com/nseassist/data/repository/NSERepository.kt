@@ -80,6 +80,13 @@ class NSERepository {
             if (vix >= 20.0) AppLogger.w("VIX", "VIX ≥ 20 — high volatility, consider skipping trades today")
             if (vix > 0.0) cachedVix = vix   // cache for prediction refinement
 
+            // Warm NIFTY condition cache using data already in hand — no extra network call
+            if (nifty != null) {
+                val niftyAboveVwap = nifty.price > (nifty.dayHigh + nifty.dayLow + nifty.price) / 3
+                niftyConditionCache     = scorer.detectMarketCondition(nifty.changePct, niftyAboveVwap)
+                niftyConditionTimestamp = System.currentTimeMillis()
+            }
+
             // Fetch screener once — shared by both gainers and losers sort
             val screenerQuotes = withTimeoutOrNull(30_000L) {
                 YahooFinanceClient.screenNseStocks(minVolume = 1_000_000)
@@ -1261,6 +1268,9 @@ class NSERepository {
             adx < 20.0                 -> (confidence - 8).coerceAtLeast(30).also  { reasons += "adx:choppy-8" }
             else                       -> confidence
         }
+
+        // ── Cap: confidence never exceeds 88 regardless of bonus stacking ────────
+        confidence = confidence.coerceAtMost(88)
 
         // ── Clamp: high >= ltp, low <= ltp, never > ltp ± 3×ATR ─────────────────
         high = high.coerceIn(ltp, ltp + atr * 3.0)

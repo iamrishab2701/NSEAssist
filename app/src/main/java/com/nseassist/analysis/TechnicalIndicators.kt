@@ -1,5 +1,6 @@
 package com.nseassist.analysis
 
+import android.util.Log
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
@@ -140,6 +141,7 @@ class TechnicalIndicators {
             (1 until last20.size).map { kotlin.math.abs(last20[it] - last20[it - 1]) }.average()
         else atr
         val atrMultiplier = if (atr > avgDailyMove * 1.3) 0.75 else 0.5
+        Log.d("PREDICT_ATR", "atr=${"%.2f".format(atr)} avgMove=${"%.2f".format(avgDailyMove)} multiplier=$atrMultiplier (${if (atrMultiplier == 0.75) "WIDE" else "normal"})")
 
         val high = predictedClose + atr * atrMultiplier
         val low = predictedClose - atr * atrMultiplier
