@@ -49,14 +49,15 @@ android {
             firebaseAppDistribution {
                 releaseNotes = """v${appVersionName} — What's new:
 
-• Smarter price predictions — prediction range now anchors to live price during market hours, so targets reflect today's actual price action
-• Adaptive prediction bands — bands automatically widen for stocks moving more than usual, reducing false range violations
-• Weighted signal scoring — VWAP, MACD, and Supertrend now count double in the confidence calculation; stronger signals carry more weight
-• NIFTY conflict penalty — if a stock's predicted direction contradicts NIFTY's market trend, confidence is penalised to avoid false signals
-• ORB breakout boost — confirmed breakout above ORB high or breakdown below ORB low now adds confidence instead of just adjusting the range
-• Confidence cap — maximum confidence capped at 88% to keep predictions honest; no more unrealistically high scores on strong-trend days
-• Faster NIFTY cache warm-up — market condition is now ready before your first scan, so the penalty works from the very first prediction
-• Fix: Upstox VWAP and volume on closed market days — when market is closed or it's a weekend, Upstox returns 0 for VWAP and volume; the app now correctly falls back to calculated VWAP and Yahoo's volume instead of using the invalid 0 values"""
+Prediction accuracy improvements:
+• Volume confirmation — breakouts backed by 2x average volume get +8 confidence; low volume signals are penalised
+• Time-of-day awareness — morning breakout window (9:15–11:30) rewarded; midday choppy zone (11:30–1:30) penalised; afternoon trend resumption boosted when ADX confirms
+• Previous Day High/Low — breaking above PDH or below PDL boosts confidence; approaching these levels as resistance/support reduces it and adjusts the predicted range
+• Candle at key levels — a bullish candle near swing support or bearish candle near swing resistance carries extra weight vs the same pattern mid-air
+
+Earlier improvements (v5.5.0):
+• Live LTP anchoring, adaptive ATR bands, weighted signal scoring, ORB breakout boost, NIFTY conflict penalty, confidence cap at 88%
+• Fix: Upstox VWAP and volume correctly fall back when market is closed or token is valid on a weekend"""
                 groups       = "testers"
             }
         }
