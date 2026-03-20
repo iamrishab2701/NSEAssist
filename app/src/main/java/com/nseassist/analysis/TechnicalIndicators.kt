@@ -132,9 +132,17 @@ class TechnicalIndicators {
         val predictedClose = window.last() + slope  // next session projection
 
         val ltp = closes.last()
-        val high = predictedClose + atr * 0.5
-        val low = predictedClose - atr * 0.5
         val slopePct = if (ltp != 0.0) (slope / ltp) * 100 else 0.0
+
+        // Adaptive ATR multiplier: widen band when stock is more volatile than its recent average
+        val last20 = window.takeLast(20)
+        val avgDailyMove = if (last20.size >= 2)
+            (1 until last20.size).map { kotlin.math.abs(last20[it] - last20[it - 1]) }.average()
+        else atr
+        val atrMultiplier = if (atr > avgDailyMove * 1.3) 0.75 else 0.5
+
+        val high = predictedClose + atr * atrMultiplier
+        val low = predictedClose - atr * atrMultiplier
 
         val direction = when {
             slopePct > 0.3 -> "Up"
@@ -142,16 +150,22 @@ class TechnicalIndicators {
             else -> "Sideways"
         }
 
-        // Confidence based on recent momentum consistency
+        // Confidence based on recent momentum consistency + slope strength
         val last5 = closes.takeLast(5)
         val consistentDays = when (direction) {
             "Up" -> (1 until last5.size).count { last5[it] > last5[it - 1] }
             "Down" -> (1 until last5.size).count { last5[it] < last5[it - 1] }
             else -> 0
         }
-        val confidence = when (consistentDays) {
+        val baseConfidence = when (consistentDays) {
             4 -> 80; 3 -> 70; 2 -> 60; else -> 50
         }
+        val slopeBonus = when {
+            kotlin.math.abs(slopePct) > 1.0 -> 10
+            kotlin.math.abs(slopePct) > 0.6 -> 5
+            else -> 0
+        }
+        val confidence = (baseConfidence + slopeBonus).coerceAtMost(90)
 
         return PricePrediction(high, low, direction, confidence)
     }
