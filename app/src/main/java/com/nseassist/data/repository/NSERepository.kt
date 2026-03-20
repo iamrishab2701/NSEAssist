@@ -466,7 +466,9 @@ class NSERepository {
 
             val sessionPhase = currentSessionPhase()
 
-            // Refine prediction using all 6 accuracy improvements
+            // Refine prediction using all 10 accuracy improvements
+            val prevDayHigh = if (highs.size >= 2) highs.dropLast(1).last() else 0.0
+            val prevDayLow  = if (lows.size  >= 2) lows.dropLast(1).last()  else 0.0
             val refined = refinePrediction(
                 raw                   = prediction,
                 symbol                = cleanSymbol,
@@ -486,6 +488,13 @@ class NSERepository {
                 macdLine              = macdLine,
                 macdSignal            = macdSignal,
                 marketCondition       = marketConditionOrNeutral(),
+                volume                = volume,
+                avgVolume             = quote.avgVolume,
+                sessionPhase          = sessionPhase,
+                prevDayHigh           = prevDayHigh,
+                prevDayLow            = prevDayLow,
+                support               = support,
+                resistance            = resistance,
             )
 
             val stockData = StockData(
@@ -723,7 +732,9 @@ class NSERepository {
 
                 val sessionPhase = currentSessionPhase()
 
-                // Refine prediction using all 6 accuracy improvements
+                // Refine prediction using all 10 accuracy improvements
+                val prevDayHigh = if (highs.size >= 2) highs.dropLast(1).last() else 0.0
+                val prevDayLow  = if (lows.size  >= 2) lows.dropLast(1).last()  else 0.0
                 val refined = refinePrediction(
                     raw                   = prediction,
                     symbol                = phase1.symbol,
@@ -743,6 +754,13 @@ class NSERepository {
                     macdLine              = macdLine,
                     macdSignal            = macdSignal,
                     marketCondition       = marketConditionOrNeutral(),
+                    volume                = phase1.volume,
+                    avgVolume             = phase1.avgVolume,
+                    sessionPhase          = sessionPhase,
+                    prevDayHigh           = prevDayHigh,
+                    prevDayLow            = prevDayLow,
+                    support               = support,
+                    resistance            = resistance,
                 )
 
                 val stockData = phase1.copy(
@@ -1118,6 +1136,13 @@ class NSERepository {
         macdLine: Double,
         macdSignal: Double,
         marketCondition: StockScorer.MarketCondition = StockScorer.MarketCondition.CHOPPY,
+        volume: Long = 0L,
+        avgVolume: Long = 0L,
+        sessionPhase: String = "CLOSED",
+        prevDayHigh: Double = 0.0,
+        prevDayLow: Double = 0.0,
+        support: Double = 0.0,
+        resistance: Double = 0.0,
     ): TechnicalIndicators.PricePrediction {
         var high       = raw.high
         var low        = raw.low
@@ -1268,6 +1293,71 @@ class NSERepository {
             adx >= 25.0 && adxAligned  -> (confidence + 5).coerceAtMost(100).also { reasons += "adx:trend+5" }
             adx < 20.0                 -> (confidence - 8).coerceAtLeast(30).also  { reasons += "adx:choppy-8" }
             else                       -> confidence
+        }
+
+        // ── 7. Volume confirmation ────────────────────────────────────────────────
+        if (avgVolume > 0L && direction != "Sideways") {
+            val volumeRatio = volume.toDouble() / avgVolume.toDouble()
+            when {
+                volumeRatio >= 2.0 -> { confidence = (confidence + 8).coerceAtMost(100); reasons += "vol:2x+8" }
+                volumeRatio >= 1.5 -> { confidence = (confidence + 5).coerceAtMost(100); reasons += "vol:1.5x+5" }
+                volumeRatio < 0.5  -> { confidence = (confidence - 5).coerceAtLeast(30);  reasons += "vol:low-5" }
+            }
+        }
+
+        // ── 8. Time-of-day awareness ──────────────────────────────────────────────
+        when (sessionPhase) {
+            "MORNING" -> {
+                // 9:15–11:30 — breakout window, reward directional signals
+                if (direction != "Sideways") { confidence = (confidence + 5).coerceAtMost(100); reasons += "time:morning+5" }
+            }
+            "MIDDAY" -> {
+                // 11:30–1:30 — choppy zone, many false signals
+                confidence = (confidence - 8).coerceAtLeast(30); reasons += "time:midday-8"
+            }
+            "AFTERNOON" -> {
+                // 1:30–3:30 — trend resumption, boost only when ADX confirms trend
+                if (direction != "Sideways" && adxAligned) { confidence = (confidence + 3).coerceAtMost(100); reasons += "time:afternoon+3" }
+            }
+        }
+
+        // ── 9. Previous Day High/Low (PDH/PDL) resistance/support ─────────────────
+        if (prevDayHigh > 0.0 && prevDayLow > 0.0) {
+            when {
+                direction == "Up" && ltp > prevDayHigh -> {
+                    // Broke above PDH — strong bullish confirmation
+                    confidence = (confidence + 8).coerceAtMost(100); reasons += "pdh:breakout+8"
+                }
+                direction == "Up" && ltp >= prevDayHigh * 0.995 -> {
+                    // Approaching PDH — cap the high there, flag resistance
+                    high = minOf(high, prevDayHigh * 1.005)
+                    confidence = (confidence - 5).coerceAtLeast(30); reasons += "pdh:resistance-5"
+                }
+                direction == "Down" && ltp < prevDayLow -> {
+                    // Broke below PDL — strong bearish confirmation
+                    confidence = (confidence + 8).coerceAtMost(100); reasons += "pdl:breakdown+8"
+                }
+                direction == "Down" && ltp <= prevDayLow * 1.005 -> {
+                    // Approaching PDL — floor the low there, flag support
+                    low = maxOf(low, prevDayLow * 0.995)
+                    confidence = (confidence - 5).coerceAtLeast(30); reasons += "pdl:support-5"
+                }
+            }
+        }
+
+        // ── 10. Candle pattern at key levels ──────────────────────────────────────
+        // A candle forming near support/resistance is far more meaningful than mid-air
+        if (support > 0.0 && resistance > 0.0) {
+            val nearSupport    = ltp <= support * 1.02
+            val nearResistance = ltp >= resistance * 0.98
+            when {
+                dailyCandleSignal == TechnicalIndicators.CandleSignal.BULLISH && nearSupport -> {
+                    confidence = (confidence + 7).coerceAtMost(100); reasons += "candle:bull@support+7"
+                }
+                dailyCandleSignal == TechnicalIndicators.CandleSignal.BEARISH && nearResistance -> {
+                    confidence = (confidence + 7).coerceAtMost(100); reasons += "candle:bear@resistance+7"
+                }
+            }
         }
 
         // ── Cap: confidence never exceeds 88 regardless of bonus stacking ────────
