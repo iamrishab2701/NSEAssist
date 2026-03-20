@@ -131,7 +131,7 @@ fun StockDetailScreen(navController: NavController, symbol: String, vm: MainView
                 val fabBaseColor = if (isShortMode) RedBear else BluePrimary
                 FloatingActionButton(
                     onClick = { if (!isAnalyzing) showAiSheet = true },
-                    containerColor = if (isAnalyzing) fabBaseColor.copy(alpha = 0.65f) else fabBaseColor,
+                    containerColor = fabBaseColor,
                     contentColor = Color.White,
                     shape = RoundedCornerShape(16.dp),
                 ) {
@@ -724,7 +724,7 @@ private fun StockDetailContent(
         }
 
         // Quick Take — plain English summary (shown only when 30-min data is available)
-        stock.quickTake?.let { QuickTakeCard(it, aiAnalysis = aiAnalysis) }
+        stock.quickTake?.let { QuickTakeCard(it, aiAnalysis = aiAnalysis, isAiLoading = isAiLoading) }
 
         // Price header
         Card(colors = CardDefaults.cardColors(containerColor = CardDark)) {
@@ -1065,6 +1065,7 @@ private fun newsColor(sentiment: NewsSentiment) = when (sentiment) {
 private fun QuickTakeCard(
     qt: QuickTake,
     aiAnalysis: SingleStockAiAnalysis? = null,
+    isAiLoading: Boolean = false,
 ) {
     // Use AI target/stop when the AI returned a GO verdict with real values
     val useAiValues = aiAnalysis != null &&
@@ -1176,7 +1177,7 @@ private fun QuickTakeCard(
                 }
             }
 
-            if (qt.target != "—" || useAiValues) {
+            if (qt.target != "—" || isAiLoading || useAiValues) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Surface(
                         shape = RoundedCornerShape(10.dp),
@@ -1196,7 +1197,11 @@ private fun QuickTakeCard(
                                     }
                                 }
                             }
-                            Text(displayTarget, color = GreenBull, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                            if (isAiLoading && !useAiValues) {
+                                CircularProgressIndicator(modifier = Modifier.size(14.dp), color = GreenBull, strokeWidth = 2.dp)
+                            } else {
+                                Text(displayTarget, color = GreenBull, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                            }
                         }
                     }
                     Surface(
@@ -1217,7 +1222,11 @@ private fun QuickTakeCard(
                                     }
                                 }
                             }
-                            Text(displayStopLoss, color = RedBear, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                            if (isAiLoading && !useAiValues) {
+                                CircularProgressIndicator(modifier = Modifier.size(14.dp), color = RedBear, strokeWidth = 2.dp)
+                            } else {
+                                Text(displayStopLoss, color = RedBear, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                            }
                         }
                     }
                 }
