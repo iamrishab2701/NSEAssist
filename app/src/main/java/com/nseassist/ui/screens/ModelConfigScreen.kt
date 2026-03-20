@@ -3,6 +3,7 @@ package com.nseassist.ui.screens
 import android.content.Intent
 import android.net.Uri
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.ui.graphics.Color
@@ -82,7 +83,12 @@ fun ModelConfigScreen(navController: NavController, vm: MainViewModel) {
                 fontSize = 13.sp,
             )
             aiSettings.providers.forEach { config ->
-                AiProviderCard(config = config, onSave = vm::upsertAiProvider)
+                AiProviderCard(
+                    config       = config,
+                    isPrimary    = config.provider == aiSettings.primaryProvider,
+                    onSave       = vm::upsertAiProvider,
+                    onSetPrimary = { vm.savePrimaryProvider(config.provider) },
+                )
             }
 
             // ── Developer / Test Settings ─────────────────────────────────────
@@ -343,14 +349,45 @@ private fun DataSourceOption(
 @Composable
 private fun AiProviderCard(
     config: AiProviderConfig,
+    isPrimary: Boolean,
     onSave: (AiProvider, String, String) -> Unit,
+    onSetPrimary: () -> Unit,
 ) {
     var apiKey by remember(config.provider, config.apiKey) { mutableStateOf(config.apiKey) }
     var model  by remember(config.provider, config.model)  { mutableStateOf(config.model) }
 
     Card(colors = CardDefaults.cardColors(containerColor = CardDark), modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text(config.provider.label, fontWeight = FontWeight.Bold, fontSize = 16.sp, color = TextPrimary)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(config.provider.label, fontWeight = FontWeight.Bold, fontSize = 16.sp, color = TextPrimary)
+                if (config.apiKey.isNotBlank()) {
+                    if (isPrimary) {
+                        Surface(
+                            color = GreenBull.copy(alpha = 0.15f),
+                            shape = RoundedCornerShape(6.dp),
+                        ) {
+                            Text(
+                                "★ Primary",
+                                color = GreenBull,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                            )
+                        }
+                    } else {
+                        TextButton(
+                            onClick = onSetPrimary,
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                        ) {
+                            Text("Set as Primary", fontSize = 11.sp, color = TextSecondary)
+                        }
+                    }
+                }
+            }
             OutlinedTextField(
                 value = apiKey,
                 onValueChange = { apiKey = it.trim() },

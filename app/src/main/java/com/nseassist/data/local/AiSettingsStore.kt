@@ -18,7 +18,12 @@ class AiSettingsStore(context: Context) {
                 model = prefs.getString(modelKey(provider), provider.defaultModel) ?: provider.defaultModel,
             )
         }
-        return AiSettings(providers)
+        val primary = AiProvider.fromRouteValue(prefs.getString(KEY_PRIMARY_PROVIDER, null))
+        return AiSettings(providers = providers, primaryProvider = primary)
+    }
+
+    fun savePrimaryProvider(provider: AiProvider) {
+        prefs.edit().putString(KEY_PRIMARY_PROVIDER, provider.routeValue).apply()
     }
 
     fun save(config: AiProviderConfig) {
@@ -83,6 +88,7 @@ class AiSettingsStore(context: Context) {
 
     companion object {
         private const val PREFS_NAME               = "ai_settings"
+        private const val KEY_PRIMARY_PROVIDER      = "primary_ai_provider"
         private const val KEY_TEST_MORNING_SELLOFF = "test_morning_selloff"
         private const val KEY_DATA_SOURCE          = "data_source"
         private const val KEY_UPSTOX_API_KEY       = "upstox_api_key"

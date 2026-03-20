@@ -21,8 +21,11 @@ data class AiProviderConfig(
 
 data class AiSettings(
     val providers: List<AiProviderConfig> = AiProvider.values().map { AiProviderConfig(provider = it) },
+    val primaryProvider: AiProvider? = null,
 ) {
     fun configuredProviders(): List<AiProviderConfig> = providers.filter { it.apiKey.isNotBlank() }
+    fun primaryConfig(): AiProviderConfig? =
+        providers.firstOrNull { it.provider == primaryProvider && it.apiKey.isNotBlank() }
 }
 
 data class AiStockAllocation(

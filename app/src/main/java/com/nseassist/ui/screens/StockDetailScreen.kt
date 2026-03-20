@@ -47,7 +47,21 @@ fun StockDetailScreen(navController: NavController, symbol: String, vm: MainView
     var showAiSheet     by remember { mutableStateOf(false) }
     var showReplaySheet by remember { mutableStateOf(false) }
 
-    LaunchedEffect(symbol) { vm.loadStockDetail(symbol) }
+    LaunchedEffect(symbol) {
+        vm.clearSingleStockAnalysis()
+        vm.loadStockDetail(symbol)
+    }
+
+    // Auto-trigger AI using the designated primary provider once stock detail loads.
+    // Deduplication is handled inside the ViewModel (autoTriggerAiIfNeeded) using a Set,
+    // so Phase 2 cache stocks re-emitting a second UiState.Success ~18s later will not
+    // cause a second API call.
+    val primaryConfig = aiSettings.primaryConfig()
+    LaunchedEffect(detailState, primaryConfig) {
+        if (detailState is UiState.Success && primaryConfig != null) {
+            vm.autoTriggerAiIfNeeded(symbol, primaryConfig.provider, capital)
+        }
+    }
 
     // ── AI bottom sheet — rendered outside Scaffold so it overlays everything ────
     if (showAiSheet) {
@@ -153,6 +167,8 @@ fun StockDetailScreen(navController: NavController, symbol: String, vm: MainView
                 stock           = state.data,
                 newsState       = newsState,
                 isShortMode     = isShortMode,
+                aiAnalysis      = (singleStockAnalysis as? UiState.Success)?.data,
+                isAiLoading     = singleStockAnalysis is UiState.Loading,
                 modifier        = Modifier.padding(padding),
                 onReplaySignals = {
                     showReplaySheet = true
@@ -668,6 +684,8 @@ private fun StockDetailContent(
     stock: StockData,
     newsState: UiState<NewsResult?>,
     isShortMode: Boolean = false,
+    aiAnalysis: SingleStockAiAnalysis? = null,
+    isAiLoading: Boolean = false,
     modifier: Modifier,
     onReplaySignals: () -> Unit,
 ) {
@@ -706,7 +724,7 @@ private fun StockDetailContent(
         }
 
         // Quick Take — plain English summary (shown only when 30-min data is available)
-        stock.quickTake?.let { QuickTakeCard(it) }
+        stock.quickTake?.let { QuickTakeCard(it, aiAnalysis = aiAnalysis, isAiLoading = isAiLoading) }
 
         // Price header
         Card(colors = CardDefaults.cardColors(containerColor = CardDark)) {
@@ -1044,7 +1062,17 @@ private fun newsColor(sentiment: NewsSentiment) = when (sentiment) {
 // Designed for beginners — no jargon, just: what's happening, what to do, why.
 
 @Composable
-private fun QuickTakeCard(qt: QuickTake) {
+private fun QuickTakeCard(
+    qt: QuickTake,
+    aiAnalysis: SingleStockAiAnalysis? = null,
+    isAiLoading: Boolean = false,
+) {
+    // Use AI target/stop when the AI returned a GO verdict with real values
+    val useAiValues = aiAnalysis != null &&
+            aiAnalysis.verdict == "GO" &&
+            aiAnalysis.target != "N/A" && aiAnalysis.target != "—"
+    val displayTarget   = if (useAiValues) aiAnalysis!!.target   else qt.target
+    val displayStopLoss = if (useAiValues) aiAnalysis!!.stopLoss else qt.stopLoss
     val sessionColor = when (qt.sessionPhase) {
         "MORNING"   -> GreenBull
         "MIDDAY"    -> AmberWarn
@@ -1149,7 +1177,7 @@ private fun QuickTakeCard(qt: QuickTake) {
                 }
             }
 
-            if (qt.target != "—") {
+            if (qt.target != "—" || isAiLoading || useAiValues) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Surface(
                         shape = RoundedCornerShape(10.dp),
@@ -1157,8 +1185,23 @@ private fun QuickTakeCard(qt: QuickTake) {
                         modifier = Modifier.weight(1f),
                     ) {
                         Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                            Text("🎯  Target", color = TextSecondary, fontSize = 10.sp)
-                            Text(qt.target, color = GreenBull, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                            ) {
+                                Text("🎯  Target", color = TextSecondary, fontSize = 10.sp)
+                                if (useAiValues) {
+                                    Surface(shape = RoundedCornerShape(3.dp), color = BluePrimary.copy(alpha = 0.20f)) {
+                                        Text("AI", color = BluePrimary, fontSize = 9.sp, fontWeight = FontWeight.Bold,
+                                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp))
+                                    }
+                                }
+                            }
+                            if (isAiLoading && !useAiValues) {
+                                CircularProgressIndicator(modifier = Modifier.size(14.dp), color = GreenBull, strokeWidth = 2.dp)
+                            } else {
+                                Text(displayTarget, color = GreenBull, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                            }
                         }
                     }
                     Surface(
@@ -1167,8 +1210,23 @@ private fun QuickTakeCard(qt: QuickTake) {
                         modifier = Modifier.weight(1f),
                     ) {
                         Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                            Text("🛑  Stop Loss", color = TextSecondary, fontSize = 10.sp)
-                            Text(qt.stopLoss, color = RedBear, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                            ) {
+                                Text("🛑  Stop Loss", color = TextSecondary, fontSize = 10.sp)
+                                if (useAiValues) {
+                                    Surface(shape = RoundedCornerShape(3.dp), color = BluePrimary.copy(alpha = 0.20f)) {
+                                        Text("AI", color = BluePrimary, fontSize = 9.sp, fontWeight = FontWeight.Bold,
+                                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp))
+                                    }
+                                }
+                            }
+                            if (isAiLoading && !useAiValues) {
+                                CircularProgressIndicator(modifier = Modifier.size(14.dp), color = RedBear, strokeWidth = 2.dp)
+                            } else {
+                                Text(displayStopLoss, color = RedBear, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                            }
                         }
                     }
                 }

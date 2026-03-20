@@ -108,6 +108,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val _singleStockAnalysis = MutableStateFlow<UiState<SingleStockAiAnalysis>?>(null)
     val singleStockAnalysis: StateFlow<UiState<SingleStockAiAnalysis>?> = _singleStockAnalysis
 
+    /** Symbols for which auto-AI has already been triggered this session. Cleared on clearSingleStockAnalysis(). */
+    private val autoAiTriggeredSymbols = mutableSetOf<String>()
+
     // ── Deep Enrich Progress (phase 2 of scan — null when idle) ─────────────────
     private val _deepEnrichProgress = MutableStateFlow<Pair<Int, Int>?>(null)
     val deepEnrichProgress: StateFlow<Pair<Int, Int>?> = _deepEnrichProgress
@@ -680,6 +683,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         _testMorningSelloff.value = enabled
     }
 
+    fun savePrimaryProvider(provider: AiProvider) {
+        aiSettingsStore.savePrimaryProvider(provider)
+        _aiSettings.value = _aiSettings.value.copy(primaryProvider = provider)
+    }
+
     fun upsertAiProvider(provider: AiProvider, apiKey: String, model: String) {
         val updated = _aiSettings.value.providers.map { config ->
             if (config.provider == provider) {
@@ -779,8 +787,23 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /**
+     * Auto-triggers AI analysis for [symbol] only once per navigation to that stock.
+     * Subsequent calls with the same symbol (e.g. from Phase 2 deep-enrichment re-emitting
+     * UiState.Success) are silently ignored, preventing double API calls.
+     */
+    fun autoTriggerAiIfNeeded(symbol: String, provider: AiProvider, capital: Double) {
+        if (!autoAiTriggeredSymbols.add(symbol)) return   // already triggered → skip
+        // Belt-and-suspenders: if analysis is already in-flight or completed, don't fire again.
+        // This catches edge cases where the set was unexpectedly cleared before the second call.
+        val current = _singleStockAnalysis.value
+        if (current is UiState.Loading || current is UiState.Success) return
+        analyzeCurrentStockWithAi(provider, capital)
+    }
+
     fun clearSingleStockAnalysis() {
         _singleStockAnalysis.value = null
+        autoAiTriggeredSymbols.clear()
     }
 
     // ── Shared deep enrichment for top 20 stocks ─────────────────────────────────

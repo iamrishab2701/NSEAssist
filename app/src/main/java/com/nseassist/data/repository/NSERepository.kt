@@ -924,31 +924,30 @@ class NSERepository {
         val isBearish = stock.optionAction == "AVOID" ||
                         thirtyMinCandle?.signal == TechnicalIndicators.CandleSignal.BEARISH
 
-        val entryPrice = if (isBullish) ltp + atr * 0.1 else ltp - atr * 0.1
+        // Long-side entry reference for regular mode; short-side entry for short+bearish
+        val entryPrice = if (isShortMode && isBearish) ltp - atr * 0.1 else ltp + atr * 0.1
         val atrTarget  = ltp + atr * 1.2
         val atrStop    = ltp - atr * 0.6
 
-        // Use pivot R1 as target if it's above LTP and reachable today (within 8%)
-        // Use pivot R2 if LTP has already crossed R1
         // Short mode: use S1 as target (below LTP), R1 as stop (above LTP)
-        // Fallback to ATR-based target when pivots are unavailable or too far away
+        // Regular mode: always compute long-side target (R1/R2/ATR) and stop (S1/ATR)
+        // regardless of whether the stock is bullish, bearish, or wait — so Target/Stop Loss
+        // boxes are always visible in Quick Take for regular and capital search stock pages.
         val targetPrice = when {
             isShortMode && isBearish && pivots != null && pivots.s1 < ltp && pivots.s1 >= ltp * 0.92 -> pivots.s1
             isShortMode && isBearish -> ltp - atr * 1.2
-            isBullish && pivots != null && pivots.r1 > ltp && pivots.r1 <= ltp * 1.08 -> pivots.r1
-            isBullish && pivots != null && ltp >= pivots.r1 && pivots.r2 > ltp        -> pivots.r2
-            isBullish -> atrTarget
-            else      -> ltp - atr * 1.2
+            pivots != null && pivots.r1 > ltp && pivots.r1 <= ltp * 1.08 -> pivots.r1
+            pivots != null && ltp >= pivots.r1 && pivots.r2 > ltp        -> pivots.r2
+            else -> atrTarget
         }
 
         // Short mode: stop is above LTP (use R1 if close, else ATR)
-        // Long mode: use S1 as stop only when it sits between the ATR stop and LTP (valid support zone)
+        // Regular mode: stop is below LTP (use S1 if in valid support zone, else ATR)
         val stopPrice = when {
             isShortMode && isBearish && pivots != null && pivots.r1 > ltp && pivots.r1 <= ltp * 1.05 -> pivots.r1
             isShortMode && isBearish -> ltp + atr * 0.6
-            isBullish && pivots != null && pivots.s1 in atrStop..ltp -> pivots.s1
-            isBullish -> atrStop
-            else      -> ltp + atr * 0.6
+            pivots != null && pivots.s1 in atrStop..ltp -> pivots.s1
+            else -> atrStop
         }
 
         val targetPct   = kotlin.math.abs(targetPrice - entryPrice) / entryPrice * 100
@@ -957,17 +956,15 @@ class NSERepository {
         val targetSource = when {
             isShortMode && isBearish && pivots != null && pivots.s1 < ltp && pivots.s1 >= ltp * 0.92 -> "S1"
             isShortMode && isBearish -> "ATR"
-            isBullish && pivots != null && pivots.r1 > ltp && pivots.r1 <= ltp * 1.08 -> "R1"
-            isBullish && pivots != null && ltp >= pivots.r1 && pivots.r2 > ltp        -> "R2"
-            isBullish -> "ATR"
-            else      -> "N/A"
+            pivots != null && pivots.r1 > ltp && pivots.r1 <= ltp * 1.08 -> "R1"
+            pivots != null && ltp >= pivots.r1 && pivots.r2 > ltp        -> "R2"
+            else -> "ATR"
         }
         val slSource = when {
             isShortMode && isBearish && pivots != null && pivots.r1 > ltp && pivots.r1 <= ltp * 1.05 -> "R1"
             isShortMode && isBearish -> "ATR"
-            isBullish && pivots != null && pivots.s1 in atrStop..ltp -> "S1"
-            isBullish -> "ATR"
-            else      -> "N/A"
+            pivots != null && pivots.s1 in atrStop..ltp -> "S1"
+            else -> "ATR"
         }
         AppLogger.d("QT", "${stock.symbol} → target=${targetSource}(${fmt(targetPrice)}) sl=${slSource}(${fmt(stopPrice)}) action=${if (isShortMode && isBearish) "SHORT" else if (isBullish) "BUY" else if (isBearish) "AVOID" else "WAIT"}")
 
@@ -980,13 +977,13 @@ class NSERepository {
         }
         val target = when {
             isShortMode && isBearish -> "Target: ${fmt(targetPrice)} (-${pct(targetPct)}%)"
-            isBullish -> "Target: ${fmt(targetPrice)} (+${pct(targetPct)}%)"
-            else -> "—"
+            !isShortMode -> "Target: ${fmt(targetPrice)} (+${pct(targetPct)}%)"
+            else -> "—"  // short mode but not bearish — no short setup
         }
         val stopLoss = when {
             isShortMode && isBearish -> "Stop Loss: ${fmt(stopPrice)} (+${pct(stopPct)}%)"
-            isBullish -> "Stop Loss: ${fmt(stopPrice)} (-${pct(stopPct)}%)"
-            else -> "—"
+            !isShortMode -> "Stop Loss: ${fmt(stopPrice)} (-${pct(stopPct)}%)"
+            else -> "—"  // short mode but not bearish — no short setup
         }
 
         // ── WHY ───────────────────────────────────────────────────────────────
