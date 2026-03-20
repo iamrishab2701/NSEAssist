@@ -49,9 +49,7 @@ android {
             firebaseAppDistribution {
                 releaseNotes = """v${appVersionName} — What's new:
 
-• AI auto-analysis on stock open — designate a Primary AI provider in Data & AI Settings; when you open any stock the AI runs automatically and its Target/Stop Loss replace the algorithmic values in Quick Take (shown with an AI badge)
-• Target & Stop Loss always visible — Quick Take now shows Target and Stop Loss for all regular/capital-search stocks, not just bullish ones
-• Primary AI badge — the configured primary provider shows a ★ Primary badge; tap "Set as Primary" on any other configured provider to switch"""
+• Fix: Quick Take Target/Stop Loss boxes no longer show as empty coloured boxes while AI is loading — algorithmic values are shown immediately and swap to AI values once analysis completes"""
                 groups       = "testers"
             }
         }
