@@ -49,13 +49,14 @@ android {
             firebaseAppDistribution {
                 releaseNotes = """v${appVersionName} — What's new:
 
-Prediction accuracy improvements:
-• Volume confirmation — breakouts backed by 2x average volume get +8 confidence; low volume signals are penalised
-• Time-of-day awareness — morning breakout window (9:15–11:30) rewarded; midday choppy zone (11:30–1:30) penalised; afternoon trend resumption boosted when ADX confirms
-• Previous Day High/Low — breaking above PDH or below PDL boosts confidence; approaching these levels as resistance/support reduces it and adjusts the predicted range
-• Candle at key levels — a bullish candle near swing support or bearish candle near swing resistance carries extra weight vs the same pattern mid-air
+AI Analysis consistency improvements:
+• Batch AI (Capital Search & Short Scan) now requires minimum confidence >= 65 before recommending a stock — same threshold as single-stock GO verdict, so picks are consistent across both flows
+• VIX hard rule — when India VIX >= 20, all stock confidences are reduced by 15+ points; if the best pick still falls below 65 after adjustment, batch AI now correctly outputs "No trade today" instead of forcing a weak pick
+• AI Report now shows a clear notice that batch picks are shortlisted candidates, not confirmed trades — users are reminded to run full AI Analysis on the stock detail page before acting
+• Short Scan covered by all the above — weak SHORT candidates are filtered out the same way as LONG candidates
 
-Earlier improvements (v5.5.0):
+Earlier improvements (v5.7.0):
+• Volume confirmation, time-of-day awareness, Previous Day High/Low, candle at key levels
 • Live LTP anchoring, adaptive ATR bands, weighted signal scoring, ORB breakout boost, NIFTY conflict penalty, confidence cap at 88%
 • Fix: Upstox VWAP and volume correctly fall back when market is closed or token is valid on a weekend"""
                 groups       = "testers"

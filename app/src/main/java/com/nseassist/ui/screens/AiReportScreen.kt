@@ -163,6 +163,20 @@ private fun AiReportContent(
             }
         }
         item {
+            Card(
+                colors = CardDefaults.cardColors(containerColor = SurfaceDark),
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(8.dp),
+            ) {
+                Text(
+                    "These are shortlisted candidates — not confirmed trades. Tap a stock and run full AI Analysis on its detail page before trading.",
+                    color = TextSecondary,
+                    fontSize = 12.sp,
+                    modifier = Modifier.padding(12.dp),
+                )
+            }
+        }
+        item {
             RecommendationCard(
                 title = "Primary Pick",
                 symbol = report.primaryPick.symbol,

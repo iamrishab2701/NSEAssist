@@ -866,6 +866,9 @@ Rules:
 - Candle patterns, Bollinger position, ADX strength, and news together should inform quality of setup.
 - Confidence must be an integer from 0 to 100.
 - Keep rationale, entry_view, stop_loss, and target in plain English a beginner can understand. No jargon like "pullback to support", "resistance breakout confirmation", or "EMA structure". Instead say: "buy when price dips to around Rs X", "your profit target is Rs X", "if price falls below Rs X, exit immediately".
+- MINIMUM QUALITY THRESHOLD: A primary pick is only valid if its confidence score (after all adjustments) is >= 65. If no stock in the list achieves confidence >= 65, set final_verdict to "No trade today — no stock meets minimum quality standard" and explain why in summary. Still populate primary_pick with the best available stock but keep confidence as-is so the user understands the situation.
+- VIX HARD RULE: If India VIX >= 20, you MUST reduce every stock's confidence by at least 15 points before evaluating. If after this reduction the best pick's confidence is still below 65, set final_verdict to "No trade today — market too volatile (VIX >= 20)" and note this clearly in summary and risk_notes. Do not present a stock as a strong pick when VIX >= 20 has pushed confidence below 65.
+- SHORTLIST NOTICE: These picks are shortlisted candidates for further investigation, not confirmed trades. Always make clear in rationale that the user should verify with a full individual stock analysis before acting.
         """
 
         // ── Single-stock system prompt — strict GO / NO-GO verdict ────────────────
